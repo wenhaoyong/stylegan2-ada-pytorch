@@ -42,6 +42,7 @@ def num_range(s: str) -> List[int]:
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
+@click.option('--save-grid/--no-grid', help='Use --save-grid to save image grid, --no-grid to not save it', default=False, show_default=True)
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
 def generate_images(
     ctx: click.Context,
@@ -88,7 +89,7 @@ def generate_images(
     # Synthesize the result of a W projection.
     if projected_w is not None:
         if seeds is not None:
-            print ('warn: --seeds is ignored when using --projected-w')
+            print('warn: --seeds is ignored when using --projected-w')
         print(f'Generating images from projected W "{projected_w}"')
         ws = np.load(projected_w)['w']
         ws = torch.tensor(ws, device=device) # pylint: disable=not-callable
@@ -96,7 +97,7 @@ def generate_images(
         for idx, w in enumerate(ws):
             img = G.synthesis(w.unsqueeze(0), noise_mode=noise_mode)
             img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-            img = PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/proj{idx:02d}.png')
+            img = PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/proj{idx:02d}.jpg')
         return
 
     if seeds is None:
@@ -118,7 +119,7 @@ def generate_images(
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
         img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
         img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-        PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/seed{seed:04d}.png')
+        PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/seed{seed:04d}.jpg')
 
 
 #----------------------------------------------------------------------------
