@@ -34,27 +34,41 @@ def num_range(s: str) -> List[int]:
     Accept a comma separated list of numbers 'a,b,c', a range 'a-c', or a combination
     of both 'a,b-c', 'a-b,c', 'a,b-c,d,e-f,...', and return as a list of ints.
     """
-    str_list = s.split(',')
-    nums = []
-    for el in str_list:
-        if '-' in el:
-            # Get the lower and upper bounds of the range
-            a, b = el.split('-')
-            lower, upper = int(a), int(b)
-            # Sanity check 1: accept 'a-b' or 'b-a', with a<=b
-            if lower <= upper:
-                r = [n for n in range(lower, upper + 1)]
+    # coarse, middle, and fine layers as defined in the StyleGAN paper
+    if s == 'coarse':
+        return list(range(0, 4))
+    elif s == 'middle':
+        return list(range(4, 8))
+    elif s == 'fine':
+        return list(range(8, 18))
+    # Else, the user has defined specific
+    else:
+        str_list = s.split(',')
+        nums = []
+        for el in str_list:
+            if '-' in el:
+                # Get the lower and upper bounds of the range
+                a, b = el.split('-')
+                # Sanity check 0: only ints please
+                try:
+                    lower, upper = int(a), int(b)
+                except ValueError:
+                    print(f'One of the elements in "{s}" is not an int!')
+                    raise
+                # Sanity check 1: accept 'a-b' or 'b-a', with a<=b
+                if lower <= upper:
+                    r = [n for n in range(lower, upper + 1)]
+                else:
+                    r = [n for n in range(upper, lower + 1)]
+                # We will extend nums (r is also a list)
+                nums.extend(r)
             else:
-                r = [n for n in range(upper, lower + 1)]
-            # We will extend nums (r is also a list)
-            nums.extend(r)
-        else:
-            # It's a single number, so just append it
-            nums.append(int(el))
+                # It's a single number, so just append it
+                nums.append(int(el))
 
-    # Sanity check 2: delete repeating numbers, but keep order given by user
-    nums = list(OrderedDict.fromkeys(nums))
-    return nums
+        # Sanity check 2: delete repeating numbers, but keep order given by user
+        nums = list(OrderedDict.fromkeys(nums))
+        return nums
 
 
 # ----------------------------------------------------------------------------
@@ -93,7 +107,7 @@ def grid(
     python style_mixing.py grid --outdir=out --rows=85,100,75,458,1500 --cols=55,821,1789,293 \\
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
-    click.secho(f'Loading networks from "{network_pkl}"...')
+    print(f'Loading networks from "{network_pkl}"...')
     device = torch.device('cuda')
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device)  # type: ignore
@@ -198,7 +212,8 @@ def video(
     if max(col_styles) > max_style:
         click.secho(f'Warning: Maximum col-style allowed: {max_style} for loaded network "{network_pkl}" '
                     f'of resolution {G.img_resolution}x{G.img_resolution}', fg='red', bold=True)
-        sys.exit(1)
+        click.secho('Removing col-styles exceeding this value...', fg='blue')
+        col_styles[:] = [style for style in col_styles if style <= max_style]
 
     # TODO: Reject outdir set by user, return to ProGAN/SGAN/SGAN2 era
     os.makedirs(outdir, exist_ok=True)
@@ -206,7 +221,7 @@ def video(
     # First column (video) latents
     print('Generating source W vectors...')
     src_shape = [num_frames, G.z_dim]
-    src_z = np.random.RandomState(row_seed).randn(*src_shape).astype(np.float32)  # [frames, src, component]
+    src_z = np.random.RandomState(row_seed).randn(*src_shape).astype(np.float32)
     src_z = scipy.ndimage.gaussian_filter(src_z, [smoothing_sec * fps, 0], mode='wrap')  # Latents will now form a loop
     src_z /= np.sqrt(np.mean(np.square(src_z)))  # normalize
 
@@ -223,12 +238,15 @@ def video(
     W = G.img_resolution
     H = G.img_resolution
 
-    # Generate all source images (first column; video)
-    src_images = G.synthesis(src_w, noise_mode=noise_mode)
-    src_images = (src_images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
-    # Generate all destination images (first row; static images)
-    dst_images = G.synthesis(dst_w, noise_mode=noise_mode)
-    dst_images = (dst_images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
+    # Video name
+    mp4_name = f'{len(col_seeds)}x1'
+
+    if list(range(0, 4)) == col_styles:
+        mp4_name = f'{mp4_name}-coarse_styles'
+    elif list(range(4, 8)) == col_styles:
+        mp4_name = f'{mp4_name}-middle_styles'
+    elif list(range(8, max_style)) == col_styles:
+        mp4_name = f'{mp4_name}-fine_styles'
 
     # If user wishes to only show the style-transferred images (nice for 1x1 case)
     if only_stylemix:
@@ -240,7 +258,7 @@ def video(
             # Get the frame number according to time t
             frame_idx = int(np.clip(np.round(t * fps), 0, num_frames - 1))
             # For each of the column images
-            for col, _ in enumerate(list(dst_images)):
+            for col, _ in enumerate(dst_w):  # TODO: change this to dst_w
                 # Select the pertinent latent w column
                 w_col = dst_w[col].unsqueeze(0)  # [18, 512] -> [1, 18, 512]
                 # Replace the values defined by col_styles
@@ -254,20 +272,25 @@ def video(
 
             return np.array(canvas)
 
-        mp4_name = f'{len(col_seeds)}x1-only-stylemix.mp4'
+        mp4_name = f'{mp4_name}-only-stylemix'
     else:
         print('Generating style-mixing video...')
-        # Generate a canvas where we will paste all the generated images
+        # Generate an empty canvas where we will paste all the generated images
         canvas = PIL.Image.new('RGB', (W * (len(col_seeds) + 1), H * (len([row_seed]) + 1)), 'black')
 
+        # Generate all destination images (first row; static images)
+        dst_images = G.synthesis(dst_w, noise_mode=noise_mode)
+        dst_images = (dst_images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
+        # Paste them in the canvas
         for col, dst_image in enumerate(list(dst_images)):
             canvas.paste(PIL.Image.fromarray(dst_image, 'RGB'), ((col + 1) * H, 0))
 
         def make_frame(t):
             # Get the frame number according to time t
             frame_idx = int(np.clip(np.round(t * fps), 0, num_frames - 1))
-            # Get the image at this frame
-            src_image = src_images[frame_idx]
+            # Get the image at this frame (first column; video)
+            src_image = G.synthesis(src_w[frame_idx].unsqueeze(0), noise_mode=noise_mode)  # [18, 512] -> [1, 18, 512]
+            src_image = (src_image.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()[0]
             # Paste it to the lower left
             canvas.paste(PIL.Image.fromarray(src_image, 'RGB'), (0, H))
 
@@ -282,17 +305,25 @@ def video(
                 col_images = (col_images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
                 # Paste them in their respective spot in the grid
                 for row, image in enumerate(list(col_images)):
-                    canvas.paste(PIL.Image.fromarray(image, 'RGB'), ((col + 1 ) * H, (row + 1) * W))
+                    canvas.paste(PIL.Image.fromarray(image, 'RGB'), ((col + 1) * H, (row + 1) * W))
 
             return np.array(canvas)
 
-        mp4_name = f'{len(col_seeds)}x1-style-mixing.mp4'
+        mp4_name = f'{mp4_name}-style-mixing'
 
     # Generate video using the respective make_frame function
     videoclip = moviepy.editor.VideoClip(make_frame, duration=duration_sec)
+    videoclip.set_duration(duration_sec)
 
     # Change the video parameters if you so desire
-    videoclip.write_videofile(os.path.join(outdir, mp4_name), fps=fps, codec='libx264', bitrate='16M')
+    final_video = os.path.join(outdir, f'{mp4_name}.mp4')
+    videoclip.write_videofile(final_video, fps=fps, codec='libx264', bitrate='16M')
+
+    # moviepy creates huge videos, so use ffmpeg to resize it (storage-wise), but it can be used to
+    # e.g. resize the video, make a GIF, save all frames in the video, etc.; see the docs
+    import ffmpeg  # pip install ffmpeg-python
+    resized_video = os.path.join(outdir, f'{mp4_name}-resized.mp4')
+    ffmpeg.input(final_video).output(resized_video).run()
 
 
 # ----------------------------------------------------------------------------
