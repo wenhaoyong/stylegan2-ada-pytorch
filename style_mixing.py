@@ -9,6 +9,7 @@
 """Generate style mixing image matrix using pretrained network pickle."""
 
 import os
+import sys
 from collections import OrderedDict
 from typing import List
 
@@ -194,8 +195,12 @@ def video(
 
     # Sanity check: loaded model and selected styles must be compatible
     max_style = 2 * int(np.log2(G.img_resolution)) - 3
-    assert max(col_styles) <= max_style, f'Maximum col-style allowed: {max_style}'
+    if max(col_styles) > max_style:
+        click.secho(f'Warning: Maximum col-style allowed: {max_style} for loaded network "{network_pkl}" '
+                    f'of resolution {G.img_resolution}x{G.img_resolution}', fg='red', bold=True)
+        sys.exit(1)
 
+    # TODO: Reject outdir set by user, return to ProGAN/SGAN/SGAN2 era
     os.makedirs(outdir, exist_ok=True)
 
     # First column (video) latents
@@ -210,18 +215,18 @@ def video(
     src_w = w_avg + (src_w - w_avg) * truncation_psi
 
     # First row (images) latents
-    dst_z = np.stack([np.random.RandomState(seed).randn(G.z_dim)] for seed in col_seeds)
-    dst_w = G.mapping(torch.from_numpy(dst_z).to(device), None)  # TODO: error here, compare mapping to StyleGAN2
+    dst_z = np.stack([np.random.RandomState(seed).randn(G.z_dim) for seed in col_seeds])
+    dst_w = G.mapping(torch.from_numpy(dst_z).to(device), None)
     dst_w = w_avg + (dst_w - w_avg) * truncation_psi
 
     # Width and height of the generated image
     W = G.img_resolution
     H = G.img_resolution
 
-    # Generate all source images (first column)
+    # Generate all source images (first column; video)
     src_images = G.synthesis(src_w, noise_mode=noise_mode)
     src_images = (src_images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
-    # Generate all destination images (first row)
+    # Generate all destination images (first row; static images)
     dst_images = G.synthesis(dst_w, noise_mode=noise_mode)
     dst_images = (dst_images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
 
@@ -237,7 +242,7 @@ def video(
             # For each of the column images
             for col, _ in enumerate(list(dst_images)):
                 # Select the pertinent latent w column
-                w_col = np.stack([dst_w[col]]) # [18, 512] -> [1, 18, 512]
+                w_col = dst_w[col].unsqueeze(0)  # [18, 512] -> [1, 18, 512]
                 # Replace the values defined by col_styles
                 w_col[:, col_styles] = src_w[frame_idx, col_styles]
                 # Generate the style-mixed images
@@ -269,7 +274,7 @@ def video(
             # For each of the column images (destination images)
             for col, _ in enumerate(list(dst_images)):
                 # Select pertinent latent w column
-                w_col = np.stack([dst_w[col]])  # [18, 512] -> [1, 18, 512]
+                w_col = dst_w[col].unsqueeze(0)  # [18, 512] -> [1, 18, 512]
                 # Replace the values defined by col_styles
                 w_col[:, col_styles] = src_w[frame_idx, col_styles]
                 # Generate these style-mixed images
@@ -284,7 +289,6 @@ def video(
         mp4_name = f'{len(col_seeds)}x1-style-mixing.mp4'
 
     # Generate video using the respective make_frame function
-    print('Generating style-mixed video...')
     videoclip = moviepy.editor.VideoClip(make_frame, duration=duration_sec)
 
     # Change the video parameters if you so desire
