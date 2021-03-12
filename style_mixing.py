@@ -34,14 +34,14 @@ def num_range(s: str) -> List[int]:
     Accept a comma separated list of numbers 'a,b,c', a range 'a-c', or a combination
     of both 'a,b-c', 'a-b,c', 'a,b-c,d,e-f,...', and return as a list of ints.
     """
-    # coarse, middle, and fine layers as defined in the StyleGAN paper
+    # coarse, middle, and fine style layers as defined in the StyleGAN paper
     if s == 'coarse':
         return list(range(0, 4))
     elif s == 'middle':
         return list(range(4, 8))
     elif s == 'fine':
         return list(range(8, 18))
-    # Else, the user has defined specific
+    # Else, the user has defined specific styles (or seeds) to use
     else:
         str_list = s.split(',')
         nums = []
@@ -65,7 +65,6 @@ def num_range(s: str) -> List[int]:
             else:
                 # It's a single number, so just append it
                 nums.append(int(el))
-
         # Sanity check 2: delete repeating numbers, but keep order given by user
         nums = list(OrderedDict.fromkeys(nums))
         return nums
@@ -112,6 +111,14 @@ def grid(
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device)  # type: ignore
 
+    # Sanity check: loaded model and selected styles must be compatible
+    max_style = 2 * int(np.log2(G.img_resolution)) - 3
+    if max(col_styles) > max_style:
+        click.secho(f'WARNING: Maximum col-style allowed: {max_style} for loaded network "{network_pkl}" '
+                    f'of resolution {G.img_resolution}x{G.img_resolution}', fg='red')
+        click.secho('Removing col-styles exceeding this value...', fg='blue')
+        col_styles[:] = [style for style in col_styles if style <= max_style]
+
     os.makedirs(outdir, exist_ok=True)
 
     print('Generating W vectors...')
@@ -155,7 +162,7 @@ def grid(
             if col_idx == 0:
                 key = (row_seed, row_seed)
             canvas.paste(PIL.Image.fromarray(image_dict[key], 'RGB'), (W * col_idx, H * row_idx))
-    canvas.save(f'{outdir}/grid.jpg')
+    canvas.save(os.path.join(outdir, 'grid.jpg'))
 
 
 # ----------------------------------------------------------------------------
@@ -167,6 +174,7 @@ def grid(
 @click.option('--cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
 @click.option('--styles', 'col_styles', type=num_range, help='Style layer range', default='0-6', show_default=True)
 @click.option('--only-stylemix', is_flag=True, help='Add flag to only show the style-mixed images in the video')
+@click.option('--compress', is_flag=True, help='Add flag to compress the final mp4 file via ffmpeg-python')
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--noise-mode', type=click.Choice(['const', 'random', 'none']), help='Noise mode', default='const', show_default=True)
 @click.option('--duration-sec', type=float, help='Duration of the video in seconds', default=30, show_default=True)
@@ -178,6 +186,7 @@ def video(
         col_seeds: List[int],
         col_styles: List[int],
         only_stylemix: bool,
+        compress: bool,
         truncation_psi: float,
         noise_mode: str,
         fps: int,
@@ -194,7 +203,7 @@ def video(
             --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
 
         \b
-        python style_mixing.py video --outdir=out --row=0 --cols=7-10 --styles=8-17 --duration-sec=60 \\
+        python style_mixing.py video --outdir=out --row=0 --cols=7-10 --styles=fine --duration-sec=60 \\
             --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
     # Calculate number of frames
@@ -210,8 +219,8 @@ def video(
     # Sanity check: loaded model and selected styles must be compatible
     max_style = 2 * int(np.log2(G.img_resolution)) - 3
     if max(col_styles) > max_style:
-        click.secho(f'Warning: Maximum col-style allowed: {max_style} for loaded network "{network_pkl}" '
-                    f'of resolution {G.img_resolution}x{G.img_resolution}', fg='red', bold=True)
+        click.secho(f'WARNING: Maximum col-style allowed: {max_style} for loaded network "{network_pkl}" '
+                    f'of resolution {G.img_resolution}x{G.img_resolution}', fg='red')
         click.secho('Removing col-styles exceeding this value...', fg='blue')
         col_styles[:] = [style for style in col_styles if style <= max_style]
 
@@ -245,7 +254,7 @@ def video(
         mp4_name = f'{mp4_name}-coarse_styles'
     elif list(range(4, 8)) == col_styles:
         mp4_name = f'{mp4_name}-middle_styles'
-    elif list(range(8, max_style)) == col_styles:
+    elif list(range(8, max_style + 1)) == col_styles:
         mp4_name = f'{mp4_name}-fine_styles'
 
     # If user wishes to only show the style-transferred images (nice for 1x1 case)
@@ -319,11 +328,18 @@ def video(
     final_video = os.path.join(outdir, f'{mp4_name}.mp4')
     videoclip.write_videofile(final_video, fps=fps, codec='libx264', bitrate='16M')
 
-    # moviepy creates huge videos, so use ffmpeg to resize it (storage-wise), but it can be used to
+    # moviepy creates huge videos, so use ffmpeg to 'compress' it. ffmpeg can also be used to
     # e.g. resize the video, make a GIF, save all frames in the video, etc.; see the docs
-    import ffmpeg  # pip install ffmpeg-python
-    resized_video = os.path.join(outdir, f'{mp4_name}-resized.mp4')
-    ffmpeg.input(final_video).output(resized_video).run()
+    if compress:
+        try:
+            import ffmpeg  # pip install ffmpeg-python if missing
+        except (ModuleNotFoundError, ImportError):
+            click.secho('Missing ffmpeg! Install it via "pip install ffmpeg-python"', fg='red', bold=True, blink=True)
+            raise
+        print('Compressing the video...')
+        resized_video = os.path.join(outdir, f'{mp4_name}-compressed.mp4')
+        ffmpeg.input(final_video).output(resized_video).run(capture_stdout=True, capture_stderr=True)
+        print('Success!')
 
 
 # ----------------------------------------------------------------------------
