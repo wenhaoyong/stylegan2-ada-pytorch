@@ -116,7 +116,7 @@ def rotate2d_inv(theta, **kwargs):
 @persistence.persistent_class
 class AugmentPipe(torch.nn.Module):
     def __init__(self,
-        xflip=0, rotate90=0, xint=0, xint_max=0.125,
+        xflip=0, yflip=0, rotate90=0, xint=0, xint_max=0.125,
         scale=0, rotate=0, aniso=0, xfrac=0, scale_std=0.2, rotate_max=1, aniso_std=0.2, xfrac_std=0.125,
         brightness=0, contrast=0, lumaflip=0, hue=0, saturation=0, brightness_std=0.2, contrast_std=0.5, hue_max=1, saturation_std=1,
         imgfilter=0, imgfilter_bands=[1,1,1,1], imgfilter_std=1,
@@ -127,6 +127,7 @@ class AugmentPipe(torch.nn.Module):
 
         # Pixel blitting.
         self.xflip            = float(xflip)            # Probability multiplier for x-flip.
+        self.yflip            = float(yflip)            # Probability multiplier for y-flip
         self.rotate90         = float(rotate90)         # Probability multiplier for 90 degree rotations.
         self.xint             = float(xint)             # Probability multiplier for integer translation.
         self.xint_max         = float(xint_max)         # Range of integer translation, relative to image dimensions.
@@ -200,6 +201,14 @@ class AugmentPipe(torch.nn.Module):
             if debug_percentile is not None:
                 i = torch.full_like(i, torch.floor(debug_percentile * 2))
             G_inv = G_inv @ scale2d_inv(1 - 2 * i, 1)
+
+        # Apply y-flip with probability (yflip * strength).
+        if self.yflip > 0:
+            i = torch.floor(torch.rand([batch_size], device=device) * 2)
+            i = torch.where(torch.rand([batch_size], device=device) < self.yflip * self.p, i, torch.zeros_like(i))
+            if debug_percentile is not None:
+                i = torch.full_like(i, torch.floor(debug_percentile * 2))
+            G_inv = G_inv @ scale2d_inv(1, 1 - 2 * i)
 
         # Apply 90 degree rotations with probability (rotate90 * strength).
         if self.rotate90 > 0:

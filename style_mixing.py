@@ -9,12 +9,13 @@
 """Generate style mixing image matrix using pretrained network pickle."""
 
 import os
-import sys
 from collections import OrderedDict
-from typing import List
-
+from typing import List, Optional
 import click
+
 import dnnlib
+from torch_utils.gen_utils import compress_video
+
 import numpy as np
 import PIL.Image
 import scipy
@@ -72,6 +73,7 @@ def num_range(s: str) -> List[int]:
 
 # ----------------------------------------------------------------------------
 
+
 # We group the different types of style-mixing (grid and video) into a main function
 @click.group()
 def main():
@@ -81,7 +83,7 @@ def main():
 # ----------------------------------------------------------------------------
 
 
-@main.command()
+@main.command(name='grid')
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--rows', 'row_seeds', type=num_range, help='Random seeds to use for image rows', required=True)
 @click.option('--cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
@@ -89,7 +91,7 @@ def main():
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--outdir', type=str, help='Directory path to save the results', required=True)
-def grid(
+def generate_style_mix(
         network_pkl: str,
         row_seeds: List[int],
         col_seeds: List[int],
@@ -169,18 +171,20 @@ def grid(
 
 
 @main.command()
+@click.context
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--row', 'row_seed', type=int, help='Random seed to use for video row', required=True)
 @click.option('--cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
 @click.option('--styles', 'col_styles', type=num_range, help='Style layer range', default='0-6', show_default=True)
 @click.option('--only-stylemix', is_flag=True, help='Add flag to only show the style-mixed images in the video')
-@click.option('--compress', is_flag=True, help='Add flag to compress the final mp4 file via ffmpeg-python')
+@click.option('--compress', is_flag=True, help='Add flag to compress the final mp4 file via ffmpeg-python (same resolution, lower file size)')
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--noise-mode', type=click.Choice(['const', 'random', 'none']), help='Noise mode', default='const', show_default=True)
 @click.option('--duration-sec', type=float, help='Duration of the video in seconds', default=30, show_default=True)
 @click.option('--fps', type=int, help='Video FPS.', default=30, show_default=True)
 @click.option('--outdir', type=str, help='Directory path to save the results', required=True)
 def video(
+        ctx: click.Context,
         network_pkl: str,
         row_seed: int,
         col_seeds: List[int],
@@ -192,7 +196,7 @@ def video(
         fps: int,
         duration_sec: float,
         outdir: str,
-        smoothing_sec=3.0  # for Gaussian blur
+        smoothing_sec: Optional[float] = 3.0  # for Gaussian blur; won't be a parameter, change at own risk
 ):
     """Generate random style-mixing video using pretrained network pickle.
 
@@ -231,7 +235,7 @@ def video(
     print('Generating source W vectors...')
     src_shape = [num_frames, G.z_dim]
     src_z = np.random.RandomState(row_seed).randn(*src_shape).astype(np.float32)
-    src_z = scipy.ndimage.gaussian_filter(src_z, [smoothing_sec * fps, 0], mode='wrap')  # Latents will now form a loop
+    src_z = scipy.ndimage.gaussian_filter(src_z, sigma=[smoothing_sec * fps, 0], mode='wrap')  # wrap to form a loop
     src_z /= np.sqrt(np.mean(np.square(src_z)))  # normalize
 
     # Map to W and do truncation trick
@@ -249,7 +253,7 @@ def video(
 
     # Video name
     mp4_name = f'{len(col_seeds)}x1'
-
+    # Add to the name the styles (from the StyleGAN paper) if they are being used
     if list(range(0, 4)) == col_styles:
         mp4_name = f'{mp4_name}-coarse_styles'
     elif list(range(4, 8)) == col_styles:
@@ -267,7 +271,7 @@ def video(
             # Get the frame number according to time t
             frame_idx = int(np.clip(np.round(t * fps), 0, num_frames - 1))
             # For each of the column images
-            for col, _ in enumerate(dst_w):  # TODO: change this to dst_w
+            for col, _ in enumerate(dst_w):
                 # Select the pertinent latent w column
                 w_col = dst_w[col].unsqueeze(0)  # [18, 512] -> [1, 18, 512]
                 # Replace the values defined by col_styles
@@ -324,22 +328,13 @@ def video(
     videoclip = moviepy.editor.VideoClip(make_frame, duration=duration_sec)
     videoclip.set_duration(duration_sec)
 
-    # Change the video parameters if you so desire
+    # Change the video parameters (codec, bitrate) if you so desire
     final_video = os.path.join(outdir, f'{mp4_name}.mp4')
     videoclip.write_videofile(final_video, fps=fps, codec='libx264', bitrate='16M')
 
-    # moviepy creates huge videos, so use ffmpeg to 'compress' it. ffmpeg can also be used to
-    # e.g. resize the video, make a GIF, save all frames in the video, etc.; see the docs
+    # Compress the video (lower file size, same resolution)
     if compress:
-        try:
-            import ffmpeg  # pip install ffmpeg-python if missing
-        except (ModuleNotFoundError, ImportError):
-            click.secho('Missing ffmpeg! Install it via "pip install ffmpeg-python"', fg='red', bold=True, blink=True)
-            raise
-        print('Compressing the video...')
-        resized_video = os.path.join(outdir, f'{mp4_name}-compressed.mp4')
-        ffmpeg.input(final_video).output(resized_video).run(capture_stdout=True, capture_stderr=True)
-        print('Success!')
+        compress_video(original_video=final_video, original_video_name=mp4_name, outdir=outdir, ctx=ctx)
 
 
 # ----------------------------------------------------------------------------

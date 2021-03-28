@@ -41,6 +41,7 @@ def setup_training_loop_kwargs(
     cond       = None, # Train conditional model based on dataset labels: <bool>, default = False
     subset     = None, # Train with only N images: <int>, default = all
     mirror     = None, # Augment dataset with x-flips: <bool>, default = False
+    mirror_y   = None, # Augment dataset with y-flips: <bool>, default = False
 
     # Base config.
     cfg        = None, # Base config: 'auto' (default), 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar'
@@ -104,7 +105,7 @@ def setup_training_loop_kwargs(
 
     assert data is not None
     assert isinstance(data, str)
-    args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False)
+    args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False, yflip=False)
     args.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=3, prefetch_factor=2)
     try:
         training_set = dnnlib.util.construct_class_by_name(**args.training_set_kwargs) # subclass of training.dataset.Dataset
@@ -141,6 +142,10 @@ def setup_training_loop_kwargs(
     if mirror:
         desc += '-mirror'
         args.training_set_kwargs.xflip = True
+
+    if mirror_y:
+        desc += '-mirror_y'
+        args.training_set_kwargs.yflip = True
 
     # ------------------------------------
     # Base config: cfg, gamma, kimg, batch
@@ -296,6 +301,12 @@ def setup_training_loop_kwargs(
         'ffhq1024':    'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/transfer-learning-source-nets/ffhq-res1024-mirror-stylegan2-noaug.pkl',
         'celebahq256': 'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/transfer-learning-source-nets/celebahq-res256-mirror-paper256-kimg100000-ada-target0.5.pkl',
         'lsundog256':  'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/transfer-learning-source-nets/lsundog-res256-paper256-kimg100000-noaug.pkl',
+        'afhqcat':     'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/afhqcat.pkl',
+        'afhqdog':     'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/afhqdog.pkl',
+        'afhqwild':    'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/afhqwild.pkl',
+        'brecahad':    'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/brecahad.pkl',
+        'cifar10':     'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/cifar10.pkl',
+        'metfaces':    'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl',
     }
 
     assert resume is None or isinstance(resume, str)
@@ -411,6 +422,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--cond', help='Train conditional model based on dataset labels [default: false]', type=bool, metavar='BOOL')
 @click.option('--subset', help='Train with only N images [default: all]', type=int, metavar='INT')
 @click.option('--mirror', help='Enable dataset x-flips [default: false]', type=bool, metavar='BOOL')
+@click.option('--mirror-y', help='Enable dataset y=flips [default: false]', type=bool, metavar='BOOL')
 
 # Base config.
 @click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar']))
@@ -477,6 +489,12 @@ def main(ctx, outdir, dry_run, **config_kwargs):
       ffhq1024       FFHQ trained at 1024x1024 resolution.
       celebahq256    CelebA-HQ trained at 256x256 resolution.
       lsundog256     LSUN Dog trained at 256x256 resolution.
+      afhqcat        AFHQ Cat trained at 512x512 resolution.
+      afhqdog        AFHQ Dog trained at 512x512 resolution.
+      afhqwild       AFHQ Wildlife trained at 512x512 resolution.
+      brecahad       BreCaHAD trained at 512x512 resolution.
+      cifar10        CIFAR-10 trained at 32x32 resolution.
+      metfaces       MetFaces trained at 1024x1024 resolution.
       <PATH or URL>  Custom network pickle.
     """
     dnnlib.util.Logger(should_flush=True)
@@ -510,6 +528,7 @@ def main(ctx, outdir, dry_run, **config_kwargs):
     print(f'Image resolution:   {args.training_set_kwargs.resolution}')
     print(f'Conditional model:  {args.training_set_kwargs.use_labels}')
     print(f'Dataset x-flips:    {args.training_set_kwargs.xflip}')
+    print(f'Dataset y=flips:    {args.training_set_kwargs.yflip}')
     print()
 
     # Dry run?
