@@ -50,7 +50,7 @@ class Dataset(torch.utils.data.Dataset):
             self._xflip = np.concatenate([self._xflip, np.ones_like(self._xflip)])
 
         # Apply yflip.
-        self._yflip = np.zeros(self.raw_idx.size, dtype=np.uint8)
+        self._yflip = np.zeros(self._raw_idx.size, dtype=np.uint8)
         if yflip:
             self._raw_idx = np.tile(self._raw_idx, 2)
             self._yflip = np.concatenate([self._yflip, np.ones_like(self._yflip)])
@@ -95,7 +95,7 @@ class Dataset(torch.utils.data.Dataset):
         assert list(image.shape) == self.image_shape
         assert image.dtype == np.uint8
         if self._xflip[idx]:
-            assert image.ndim == 3 # CHW
+            assert image.ndim == 3  # CHW
             image = image[:, :, ::-1]
         if self._yflip[idx]:
             assert image.ndim == 3  # CHW

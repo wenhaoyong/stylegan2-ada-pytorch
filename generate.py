@@ -205,7 +205,7 @@ def _parse_slowdown(slowdown: str) -> int:
 @click.option('--grid-height', '-gh', type=int, help='Video grid height / number of rows', default=None, show_default=True)
 @click.option('--slowdown', type=_parse_slowdown, help='Slow down the video by this amount; will be approximated to the nearest power of 2', default=1, show_default=True)
 @click.option('--duration-sec', '-sec', type=float, help='Duration length of the video', default=30.0, show_default=True)
-@click.option('--fps', type=parse_fps, help='', default=30, show_default=True)
+@click.option('--fps', type=parse_fps, help='Video FPS.', default=30, show_default=True)
 @click.option('--compress', is_flag=True, help='Add flag to compress the final mp4 file via ffmpeg-python (same resolution, lower file size)')
 @click.option('--outdir', type=click.Path(), help='Where to save the output videos', required=True, metavar='DIR')
 def random_interpolation_video(
