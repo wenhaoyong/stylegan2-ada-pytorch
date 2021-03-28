@@ -14,7 +14,7 @@ from typing import List, Optional
 import click
 
 import dnnlib
-from torch_utils.gen_utils import compress_video
+from torch_utils.gen_utils import parse_fps, compress_video
 
 import numpy as np
 import PIL.Image
@@ -34,6 +34,9 @@ def num_range(s: str) -> List[int]:
     Extended helper function from the original (original is contained here).
     Accept a comma separated list of numbers 'a,b,c', a range 'a-c', or a combination
     of both 'a,b-c', 'a-b,c', 'a,b-c,d,e-f,...', and return as a list of ints.
+
+    Also accepted is the styles defined in the StyleGAN paper: 'coarse', 'middle', and
+    'fine' styles, if the user wishes to use some pre-determined ones.
     """
     # coarse, middle, and fine style layers as defined in the StyleGAN paper
     if s == 'coarse':
@@ -181,7 +184,7 @@ def generate_style_mix(
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--noise-mode', type=click.Choice(['const', 'random', 'none']), help='Noise mode', default='const', show_default=True)
 @click.option('--duration-sec', type=float, help='Duration of the video in seconds', default=30, show_default=True)
-@click.option('--fps', type=int, help='Video FPS.', default=30, show_default=True)
+@click.option('--fps', type=parse_fps, help='Video FPS.', default=30, show_default=True)
 @click.option('--outdir', type=str, help='Directory path to save the results', required=True)
 def video(
         ctx: click.Context,

@@ -9,13 +9,12 @@
 """Generate images using pretrained network pickle."""
 
 import os
-import re
 from typing import List, Optional, Union
-
+from locale import atof
 import click
 
 import dnnlib
-from torch_utils.gen_utils import compress_video, double_slowdown
+from torch_utils.gen_utils import num_range, parse_fps, compress_video, double_slowdown
 
 import scipy
 import numpy as np
@@ -26,20 +25,6 @@ import legacy
 
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = 'hide'
 import moviepy.editor
-
-
-# ----------------------------------------------------------------------------
-
-
-def num_range(s: str) -> List[int]:
-    '''Accept either a comma separated list of numbers 'a,b,c' or a range 'a-c' and return as a list of ints.'''
-
-    range_re = re.compile(r'^(\d+)-(\d+)$')
-    m = range_re.match(s)
-    if m:
-        return list(range(int(m.group(1)), int(m.group(2))+1))
-    vals = s.split(',')
-    return [int(x) for x in vals]
 
 
 # ----------------------------------------------------------------------------
@@ -200,16 +185,13 @@ def generate_images(
 # ----------------------------------------------------------------------------
 
 
-def _parse_fps(fps):
-    return max(int(fps), 1)
-
-
-def _parse_slowdown(slowdown):
+def _parse_slowdown(slowdown: str) -> int:
     # TODO: slowdown should be any int, we can modify the code to be slowed down to whatever amount we want
+    slowdown = atof(slowdown)
     assert slowdown > 0
     # Let's approximate slowdown to the closest power of 2 (nothing happens if it's already a power of 2)
     slowdown = 2**int(np.rint(np.log2(slowdown)))
-    return slowdown
+    return max(slowdown, 1)  # Guard against 0.5 case
 
 
 @main.command(name='random-video')
@@ -223,7 +205,7 @@ def _parse_slowdown(slowdown):
 @click.option('--grid-height', '-gh', type=int, help='Video grid height / number of rows', default=None, show_default=True)
 @click.option('--slowdown', type=_parse_slowdown, help='Slow down the video by this amount; will be approximated to the nearest power of 2', default=1, show_default=True)
 @click.option('--duration-sec', '-sec', type=float, help='Duration length of the video', default=30.0, show_default=True)
-@click.option('--fps', type=_parse_fps, help='', default=30, show_default=True)
+@click.option('--fps', type=parse_fps, help='', default=30, show_default=True)
 @click.option('--compress', is_flag=True, help='Add flag to compress the final mp4 file via ffmpeg-python (same resolution, lower file size)')
 @click.option('--outdir', type=click.Path(), help='Where to save the output videos', required=True, metavar='DIR')
 def random_interpolation_video(
