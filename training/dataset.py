@@ -19,7 +19,9 @@ try:
 except ImportError:
     pyspng = None
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self,
@@ -46,14 +48,15 @@ class Dataset(torch.utils.data.Dataset):
         # Apply xflip.
         self._xflip = np.zeros(self._raw_idx.size, dtype=np.uint8)
         if xflip:
-            self._raw_idx = np.tile(self._raw_idx, 2)
+            self._raw_idx = np.tile(self._raw_idx, 2)  # double the size of images
             self._xflip = np.concatenate([self._xflip, np.ones_like(self._xflip)])
 
         # Apply yflip.
         self._yflip = np.zeros(self._raw_idx.size, dtype=np.uint8)
         if yflip:
-            self._raw_idx = np.tile(self._raw_idx, 2)
+            self._raw_idx = np.tile(self._raw_idx, 2)  # double the size of images
             self._yflip = np.concatenate([self._yflip, np.ones_like(self._yflip)])
+            self._xflip = np.tile(self._xflip, 2)  # double the indices for xflip, otherwise we get out of bounds
 
     def _get_raw_labels(self):
         if self._raw_labels is None:
@@ -71,10 +74,10 @@ class Dataset(torch.utils.data.Dataset):
     def close(self): # to be overridden by subclass
         pass
 
-    def _load_raw_image(self, raw_idx): # to be overridden by subclass
+    def _load_raw_image(self, raw_idx):  # to be overridden by subclass
         raise NotImplementedError
 
-    def _load_raw_labels(self): # to be overridden by subclass
+    def _load_raw_labels(self):  # to be overridden by subclass
         raise NotImplementedError
 
     def __getstate__(self):
@@ -128,12 +131,12 @@ class Dataset(torch.utils.data.Dataset):
 
     @property
     def num_channels(self):
-        assert len(self.image_shape) == 3 # CHW
+        assert len(self.image_shape) == 3  # CHW
         return self.image_shape[0]
 
     @property
     def resolution(self):
-        assert len(self.image_shape) == 3 # CHW
+        assert len(self.image_shape) == 3  # CHW
         assert self.image_shape[1] == self.image_shape[2]
         return self.image_shape[1]
 
@@ -160,13 +163,15 @@ class Dataset(torch.utils.data.Dataset):
     def has_onehot_labels(self):
         return self._get_raw_labels().dtype == np.int64
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 class ImageFolderDataset(Dataset):
     def __init__(self,
-        path,                   # Path to directory or zip.
-        resolution      = None, # Ensure specific resolution, None = highest available.
-        **super_kwargs,         # Additional arguments for the Dataset base class.
+                 path,                    # Path to directory or zip.
+                 resolution      = None,  # Ensure specific resolution, None = highest available.
+                 **super_kwargs,          # Additional arguments for the Dataset base class.
     ):
         self._path = path
         self._zipfile = None
@@ -244,4 +249,3 @@ class ImageFolderDataset(Dataset):
         labels = labels.astype({1: np.int64, 2: np.float32}[labels.ndim])
         return labels
 
-#----------------------------------------------------------------------------

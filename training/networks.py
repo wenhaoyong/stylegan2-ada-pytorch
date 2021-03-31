@@ -39,25 +39,25 @@ def modulated_conv2d(
 ):
     batch_size = x.shape[0]
     out_channels, in_channels, kh, kw = weight.shape
-    misc.assert_shape(weight, [out_channels, in_channels, kh, kw]) # [OIkk]
-    misc.assert_shape(x, [batch_size, in_channels, None, None]) # [NIHW]
-    misc.assert_shape(styles, [batch_size, in_channels]) # [NI]
+    misc.assert_shape(weight, [out_channels, in_channels, kh, kw])   # [OIkk]
+    misc.assert_shape(x, [batch_size, in_channels, None, None])  # [NIHW]
+    misc.assert_shape(styles, [batch_size, in_channels])  # [NI]
 
     # Pre-normalize inputs to avoid FP16 overflow.
     if x.dtype == torch.float16 and demodulate:
-        weight = weight * (1 / np.sqrt(in_channels * kh * kw) / weight.norm(float('inf'), dim=[1,2,3], keepdim=True)) # max_Ikk
-        styles = styles / styles.norm(float('inf'), dim=1, keepdim=True) # max_I
+        weight = weight * (1 / np.sqrt(in_channels * kh * kw) / weight.norm(float('inf'), dim=[1,2,3], keepdim=True))  # max_Ikk
+        styles = styles / styles.norm(float('inf'), dim=1, keepdim=True)  # max_I
 
     # Calculate per-sample weights and demodulation coefficients.
     w = None
     dcoefs = None
     if demodulate or fused_modconv:
-        w = weight.unsqueeze(0) # [NOIkk]
-        w = w * styles.reshape(batch_size, 1, -1, 1, 1) # [NOIkk]
+        w = weight.unsqueeze(0)  # [NOIkk]
+        w = w * styles.reshape(batch_size, 1, -1, 1, 1)  # [NOIkk]
     if demodulate:
-        dcoefs = (w.square().sum(dim=[2,3,4]) + 1e-8).rsqrt() # [NO]
+        dcoefs = (w.square().sum(dim=[2, 3, 4]) + 1e-8).rsqrt()  # [NO]
     if demodulate and fused_modconv:
-        w = w * dcoefs.reshape(batch_size, -1, 1, 1, 1) # [NOIkk]
+        w = w * dcoefs.reshape(batch_size, -1, 1, 1, 1)  # [NOIkk]
 
     # Execute by scaling the activations before and after the convolution.
     if not fused_modconv:
@@ -72,7 +72,7 @@ def modulated_conv2d(
         return x
 
     # Execute as one fused op using grouped convolution.
-    with misc.suppress_tracer_warnings(): # this value will be treated as a constant
+    with misc.suppress_tracer_warnings():  # this value will be treated as a constant
         batch_size = int(batch_size)
     misc.assert_shape(x, [batch_size, in_channels, None, None])
     x = x.reshape(1, -1, *x.shape[2:])

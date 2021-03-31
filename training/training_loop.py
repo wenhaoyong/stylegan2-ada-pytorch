@@ -24,7 +24,9 @@ from torch_utils.ops import grid_sample_gradfix
 import legacy
 from metrics import metric_main
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 def setup_snapshot_image_grid(training_set, random_seed=0):
     rnd = np.random.RandomState(random_seed)
@@ -39,7 +41,7 @@ def setup_snapshot_image_grid(training_set, random_seed=0):
 
     else:
         # Group training samples by label.
-        label_groups = dict() # label => [idx, ...]
+        label_groups = dict()  # label => [idx, ...]
         for idx in range(len(training_set)):
             label = tuple(training_set.get_details(idx).raw_label.flat[::-1])
             if label not in label_groups:
@@ -63,7 +65,8 @@ def setup_snapshot_image_grid(training_set, random_seed=0):
     images, labels = zip(*[training_set[i] for i in grid_indices])
     return (gw, gh), np.stack(images), np.stack(labels)
 
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+
 
 def save_image_grid(img, fname, drange, grid_size):
     lo, hi = drange
@@ -83,7 +86,9 @@ def save_image_grid(img, fname, drange, grid_size):
     if C == 3:
         PIL.Image.fromarray(img, 'RGB').save(fname)
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 def training_loop(
     run_dir                 = '.',      # Output directory.
@@ -133,9 +138,11 @@ def training_loop(
     # Load training set.
     if rank == 0:
         print('Loading training set...')
-    training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs) # subclass of training.dataset.Dataset
+    training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs)  # subclass of training.dataset.Dataset
     training_set_sampler = misc.InfiniteSampler(dataset=training_set, rank=rank, num_replicas=num_gpus, seed=random_seed)
-    training_set_iterator = iter(torch.utils.data.DataLoader(dataset=training_set, sampler=training_set_sampler, batch_size=batch_size//num_gpus, **data_loader_kwargs))
+    training_set_iterator = iter(torch.utils.data.DataLoader(dataset=training_set,
+                                                             sampler=training_set_sampler,
+                                                             batch_size=batch_size//num_gpus, **data_loader_kwargs))
     if rank == 0:
         print()
         print('Num images: ', len(training_set))
@@ -147,8 +154,8 @@ def training_loop(
     if rank == 0:
         print('Constructing networks...')
     common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels)
-    G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
-    D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+    G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device)  # subclass of torch.nn.Module
+    D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device)  # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
 
     # Resume from existing pickle.
@@ -418,4 +425,4 @@ def training_loop(
         print()
         print('Exiting...')
 
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------

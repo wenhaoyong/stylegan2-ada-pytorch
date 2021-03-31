@@ -185,13 +185,15 @@ def generate_images(
 # ----------------------------------------------------------------------------
 
 
-def _parse_slowdown(slowdown: str) -> int:
+def _parse_slowdown(slowdown: Union[str, int]) -> int:
+    """Function to parse the 'slowdown' parameter by the user. Will approximate to the nearest power of 2."""
     # TODO: slowdown should be any int, we can modify the code to be slowed down to whatever amount we want
-    slowdown = atof(slowdown)
+    if not isinstance(slowdown, int):
+        slowdown = atof(slowdown)
     assert slowdown > 0
     # Let's approximate slowdown to the closest power of 2 (nothing happens if it's already a power of 2)
     slowdown = 2**int(np.rint(np.log2(slowdown)))
-    return max(slowdown, 1)  # Guard against 0.5 case
+    return max(slowdown, 1)  # Guard against 0.5, 0.25, ... cases
 
 
 @main.command(name='random-video')
@@ -203,7 +205,7 @@ def _parse_slowdown(slowdown: str) -> int:
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--grid-width', '-gw', type=int, help='Video grid width / number of columns', default=None, show_default=True)
 @click.option('--grid-height', '-gh', type=int, help='Video grid height / number of rows', default=None, show_default=True)
-@click.option('--slowdown', type=_parse_slowdown, help='Slow down the video by this amount; will be approximated to the nearest power of 2', default=1, show_default=True)
+@click.option('--slowdown', type=_parse_slowdown, help='Slow down the video by this amount; will be approximated to the nearest power of 2', default='1', show_default=True)
 @click.option('--duration-sec', '-sec', type=float, help='Duration length of the video', default=30.0, show_default=True)
 @click.option('--fps', type=parse_fps, help='Video FPS.', default=30, show_default=True)
 @click.option('--compress', is_flag=True, help='Add flag to compress the final mp4 file via ffmpeg-python (same resolution, lower file size)')

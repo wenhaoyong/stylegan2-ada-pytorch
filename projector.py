@@ -22,21 +22,23 @@ import torch.nn.functional as F
 import dnnlib
 import legacy
 
+
 def project(
-    G,
-    target: torch.Tensor, # [C,H,W] and dynamic range [0,255], W & H must match G output resolution
-    *,
-    num_steps                  = 1000,
-    w_avg_samples              = 10000,
-    initial_learning_rate      = 0.1,
-    initial_noise_factor       = 0.05,
-    lr_rampdown_length         = 0.25,
-    lr_rampup_length           = 0.05,
-    noise_ramp_length          = 0.75,
-    regularize_noise_weight    = 1e5,
-    verbose                    = False,
-    device: torch.device
-):
+        G,
+        target: torch.Tensor,  # [C,H,W] and dynamic range [0,255], W & H must match G output resolution
+        *,
+        num_steps: int = 1000,
+        w_avg_samples: int = 10000,
+        initial_learning_rate: float = 0.1,
+        initial_noise_factor: float = 0.05,
+        lr_rampdown_length: float = 0.25,
+        lr_rampup_length: float = 0.05,
+        noise_ramp_length: float = 0.75,
+        regularize_noise_weight: float = 1e5,
+        project_in_wplus: bool = False,
+        verbose: bool = False,
+        device: torch.device) -> torch.Tensor:
+    """Projecting into W+ as opposed as the original repo. Should yield better results in general."""
     assert target.shape == (G.img_channels, G.img_resolution, G.img_resolution)
 
     def logprint(*args):
@@ -49,10 +51,13 @@ def project(
     logprint(f'Computing W midpoint and stddev using {w_avg_samples} samples...')
     z_samples = np.random.RandomState(123).randn(w_avg_samples, G.z_dim)
     w_samples = G.mapping(torch.from_numpy(z_samples).to(device), None)  # [N, L, C]
-    w_samples = w_samples[:, :1, :].cpu().numpy().astype(np.float32)       # [N, 1, C]
-    w_avg = np.mean(w_samples, axis=0, keepdims=True)      # [1, 1, C]
-    w_std = (np.sum((w_samples - w_avg) ** 2) / w_avg_samples) ** 0.5
-
+    if project_in_wplus:
+        w_avg = torch.mean(w_samples, axis=0, keepdims=True)      # [1, L, C]
+        w_std = (torch.sum((w_samples - w_avg) ** 2) / w_avg_samples) ** 0.5
+    else:
+        w_samples = w_samples[:, :1, :].cpu().numpy().astype(np.float32)  # [N, 1, C]
+        w_avg = np.mean(w_samples, axis=0, keepdims=True)  # [1, 1, C]
+        w_std = (np.sum((w_samples - w_avg) ** 2) / w_avg_samples) ** 0.5
     # Setup noise inputs.
     noise_bufs = { name: buf for (name, buf) in G.synthesis.named_buffers() if 'noise_const' in name }
 
@@ -67,7 +72,7 @@ def project(
         target_images = F.interpolate(target_images, size=(256, 256), mode='area')
     target_features = vgg16(target_images, resize_images=False, return_lpips=True)
 
-    w_opt = torch.tensor(w_avg, dtype=torch.float32, device=device, requires_grad=True) # pylint: disable=not-callable
+    w_opt = w_avg.clone().detach().requires_grad_(True).float().to(device)
     w_out = torch.zeros([num_steps] + list(w_opt.shape[1:]), dtype=torch.float32, device=device)
     optimizer = torch.optim.Adam([w_opt] + list(noise_bufs.values()), betas=(0.9, 0.999), lr=initial_learning_rate)
 
@@ -89,7 +94,10 @@ def project(
 
         # Synth images from opt_w.
         w_noise = torch.randn_like(w_opt) * w_noise_scale
-        ws = (w_opt + w_noise).repeat([1, G.mapping.num_ws, 1])
+        if project_in_wplus:
+            ws = w_opt + w_noise
+        else:
+            ws = (w_opt + w_noise).repeat([1, G.mapping.num_ws, 1])
         synth_images = G.synthesis(ws, noise_mode='const')
 
         # Downsample image to 256x256 if it's larger than that. VGG was built for 224x224 images.
@@ -104,7 +112,7 @@ def project(
         # Noise regularization.
         reg_loss = 0.0
         for v in noise_bufs.values():
-            noise = v[None,None,:,:] # must be [1,1,H,W] for F.avg_pool2d()
+            noise = v[None, None, :, :]  # must be [1,1,H,W] for F.avg_pool2d()
             while True:
                 reg_loss += (noise*torch.roll(noise, shifts=1, dims=3)).mean()**2
                 reg_loss += (noise*torch.roll(noise, shifts=1, dims=2)).mean()**2
@@ -127,8 +135,9 @@ def project(
             for buf in noise_bufs.values():
                 buf -= buf.mean()
                 buf *= buf.square().mean().rsqrt()
-
-    return w_out.repeat([1, G.mapping.num_ws, 1])
+    if project_in_wplus:
+        return w_out
+    return w_out.repeat([1, G.mapping.num_ws, 1])  # [num_steps, 1, C] => [num_steps, L, C]
 
 #----------------------------------------------------------------------------
 
@@ -138,6 +147,7 @@ def project(
 @click.option('--num-steps',              help='Number of optimization steps', type=int, default=1000, show_default=True)
 @click.option('--seed',                   help='Random seed', type=int, default=303, show_default=True)
 @click.option('--save-video',             help='Save an mp4 video of optimization progress', type=bool, default=True, show_default=True)
+@click.option('--project-in-wplus', '-wp', help='Project in the W+ latent space', is_flag=True)
 @click.option('--outdir',                 help='Where to save the output images', required=True, metavar='DIR')
 def run_projection(
     network_pkl: str,
@@ -181,13 +191,13 @@ def run_projection(
         device=device,
         verbose=True
     )
-    print (f'Elapsed: {(perf_counter()-start_time):.1f} s')
+    print(f'Elapsed: {(perf_counter()-start_time):.1f} s')
 
     # Render debug output: optional video and projected image and W vector.
     os.makedirs(outdir, exist_ok=True)
     if save_video:
         video = imageio.get_writer(f'{outdir}/proj.mp4', mode='I', fps=10, codec='libx264', bitrate='16M')
-        print (f'Saving optimization progress video "{outdir}/proj.mp4"')
+        print(f'Saving optimization progress video "{outdir}/proj.mp4"')
         for projected_w in projected_w_steps:
             synth_image = G.synthesis(projected_w.unsqueeze(0), noise_mode='const')
             synth_image = (synth_image + 1) * (255/2)

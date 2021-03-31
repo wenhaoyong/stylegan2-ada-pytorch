@@ -528,7 +528,7 @@ def main(ctx, outdir, dry_run, **config_kwargs):
     print(f'Image resolution:   {args.training_set_kwargs.resolution}')
     print(f'Conditional model:  {args.training_set_kwargs.use_labels}')
     print(f'Dataset x-flips:    {args.training_set_kwargs.xflip}')
-    print(f'Dataset y=flips:    {args.training_set_kwargs.yflip}')
+    print(f'Dataset y-flips:    {args.training_set_kwargs.yflip}')
     print()
 
     # Dry run?
@@ -551,9 +551,11 @@ def main(ctx, outdir, dry_run, **config_kwargs):
         else:
             torch.multiprocessing.spawn(fn=subprocess_fn, args=(args, temp_dir), nprocs=args.num_gpus)
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 if __name__ == "__main__":
-    main() # pylint: disable=no-value-for-parameter
+    main()  # pylint: disable=no-value-for-parameter
 
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------

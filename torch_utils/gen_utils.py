@@ -76,36 +76,48 @@ def compress_video(
 # ----------------------------------------------------------------------------
 
 
-def lerp(t: Union[float, np.ndarray], v0: np.ndarray, v1: np.ndarray) -> np.ndarray:
-    """
-    Linear interpolation between v0 (starting) and v1 (final) vectors; for optimal results,
-    use t as an np.ndarray to return all results at once via broadcasting
-    """
+def interpolation_checks(
+        t: Union[float, np.ndarray],
+        v0: np.ndarray,
+        v1: np.ndarray) -> Tuple[Union[float, np.ndarray], np.ndarray, np.ndarray]:
+    """Tests for the interpolation functions"""
+    # Make sure 0.0<=t<=1.0
+    assert np.min(t) >= 0.0 and np.max(t) <= 1.0
     # Guard against v0 and v1 not being NumPy arrays
     if not isinstance(v0, np.ndarray) or not isinstance(v1, np.ndarray):
         v0 = np.array(v0)
         v1 = np.array(v1)
     assert v0.shape == v1.shape, f'Incompatible shapes! v0: {v0.shape}, v1: {v1.shape}'
+    return t, v0, v1
+
+
+def lerp(
+        t: Union[float, np.ndarray],
+        v0: Union[float, list, tuple, np.ndarray],
+        v1: Union[float, list, tuple, np.ndarray]) -> np.ndarray:
+    """
+    Linear interpolation between v0 (starting) and v1 (final) vectors; for optimal results,
+    use t as an np.ndarray to return all results at once via broadcasting
+    """
+    t, v0, v1 = interpolation_checks(t, v0, v1)
     v2 = (1.0 - t) * v0 + t * v1
     return v2
 
 
 def slerp(
         t: Union[float, np.ndarray],
-        v0: np.ndarray,
-        v1: np.ndarray,
-        DOT_THRESHOLD: float = 0.9995) -> np.ndarray:
+        v0: Union[float, list, tuple, np.ndarray],
+        v1: Union[float, list, tuple, np.ndarray],
+        dot_threshold: float = 0.9995) -> np.ndarray:
     """
     Spherical linear interpolation between v0 (starting) and v1 (final) vectors; for optimal
-    results, use t as an np.ndarray to return all results at once via broadcasting. DOT_THRESHOLD
-    is the threshold for considering if the two vectors are collinear (not recommended to alter).
-    Adapted from: https://en.wikipedia.org/wiki/Slerp
+    results, use t as an np.ndarray to return all results at once via broadcasting.
+
+    dot_threshold is the threshold for considering if the two vectors are collinear (not recommended to alter).
+
+    Adapted from the Python code at: https://en.wikipedia.org/wiki/Slerp
     """
-    # Guard against v0 and v1 not being NumPy arrays
-    if not isinstance(v0, np.ndarray) or not isinstance(v1, np.ndarray):
-        v0 = np.array(v0)
-        v1 = np.array(v1)
-    assert v0.shape == v1.shape, f'Incompatible shapes! v0: {v0.shape}, v1: {v1.shape}'
+    t, v0, v1 = interpolation_checks(t, v0, v1)
     # Copy vectors to reuse them later
     v0_copy = np.copy(v0)
     v1_copy = np.copy(v1)
@@ -115,7 +127,7 @@ def slerp(
     # Dot product with the normalized vectors (can't always use np.dot, so we use the definition)
     dot = np.sum(v0 * v1)
     # If it's ~1, vectors are ~colineal, so use lerp
-    if np.abs(dot) > DOT_THRESHOLD:
+    if np.abs(dot) > dot_threshold:
         return lerp(t, v0, v1)
     # Calculate initial angle between v0 and v1
     theta_0 = np.arccos(dot)
@@ -131,8 +143,8 @@ def slerp(
 
 
 def interpolate(
-        v0: np.ndarray,
-        v1: np.ndarray,
+        v0: Union[float, list, tuple, np.ndarray],
+        v1: Union[float, list, tuple, np.ndarray],
         n_steps: int,
         interp_type: str = 'spherical',
         smooth: bool = False) -> np.ndarray:
@@ -141,15 +153,14 @@ def interpolate(
     taking n_steps. The steps can be 'smooth'-ed out, so that the transition between vectors isn't too drastic.
     """
     t_array = np.linspace(0, 1, num=n_steps, endpoint=False)
+    # TODO: have a dictionary with easing functions that contains my 'smooth' one (might be useful for someone else)
     if smooth:
         # Smooth out the interpolation with a polynomial of order 3 (cubic function f)
-        # Constructed f by setting f'(0) = f'(1) = 0, and f(0) = 0, f(1) = 1
+        # Constructed f by setting f'(0) = f'(1) = 0, and f(0) = 0, f(1) = 1 => f(t) = -2t^3+3t^2
         t_array = t_array ** 2 * (3 - 2 * t_array)
-
     # TODO: this might be possible to optimize by using the fact they're numpy arrays, but haven't found a nice way yet
     funcs_dict = {'linear': lerp, 'spherical': slerp}
     vectors = np.array([funcs_dict[interp_type](t, v0, v1) for t in t_array])
-
     return vectors
 
 
@@ -157,7 +168,8 @@ def interpolate(
 
 
 def double_slowdown(latents: np.ndarray, duration: float, frames: int) -> Tuple[np.ndarray, float, int]:
-    """Auxiliary function to slow down the video by 2x. We return the latents, duration, and frames of the video
+    """
+    Auxiliary function to slow down the video by 2x. We return the new latents, duration, and frames of the video
     """
     # Make an empty latent vector with double the amount of frames, but keep the others the same
     z = np.empty(np.multiply(latents.shape, [2, 1, 1]), dtype=np.float32)
@@ -168,6 +180,6 @@ def double_slowdown(latents: np.ndarray, duration: float, frames: int) -> Tuple[
     for i in range(1, len(z), 2):
         # slerp between (t=0.5) even frames; for the last frame, we loop to the first one
         z[i] = slerp(0.5, z[i - 1], z[i + 1]) if i != len(z) - 1 else slerp(0.5, z[0], z[i - 1])
-
-    # Return the new latents, and the respective new duration and numnber of frames
+    # TODO: we could change this to any slowdown: slerp(1/slowdown, ...), and we return z, slowdown * duration, ...
+    # Return the new latents, and the respective new duration and number of frames
     return z, 2 * duration, 2 * frames
