@@ -1,12 +1,20 @@
 ## Additions to this repo
 This README will eventually be updated to correctly show how to run the following:
 
+* **Remove `--outdir` requirement**: For `train.py`, `generate.py`, `style_mixing.py`, and `projector.py`, there is no longer
+  a need to specify where the output will be saved. The output directories will be automatically generated, as was done in the 
+  previous implementations ([ProGAN](https://github.com/tkarras/progressive_growing_of_gans) / [StyleGAN](https://github.com/NVlabs/stylegan) 
+  / [StyleGAN2](https://github.com/NVlabs/stylegan2)).
 * **Random interpolation video**: Run `python generate.py random-video --help` on how to run it, but usage is similar as in 
   [StyleGAN2](https://github.com/PDillis/stylegan2-fun#random-interpolation) (only the name changes).
 * **Style mixing videos**: Run `python style_mixing.py video --help` on how to run it, but usage is similar as in 
   [StyleGAN2](https://github.com/PDillis/stylegan2-fun#style-mixing-video).
 * **Vertical mirroring for training**: Use `--mirror-y=True` when training your model to mirror your training images along the horizontal axis.
-* [**Project in W+**](https://arxiv.org/abs/1904.03189): Use `--project-in-wplus` when running `projector.py` to project in the W+ latent space.
+* [**Project in W+**](https://arxiv.org/abs/1904.03189): Use `--project-in-wplus` when running `projector.py` to project 
+  in the W+ latent space. Use `--help` for better guidance for now.
+  * **Save all steps in the projection**: Running `projector.py` with `--save-every-step` will save all the frames of 
+the projection video as different `.jpg` files, as well as the projected disentangled latent vector at each step. These 
+  will be saved in the `.npy` format in the run dir.
 
 ***TODO:***
 

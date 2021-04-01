@@ -14,7 +14,7 @@ from locale import atof
 import click
 
 import dnnlib
-from torch_utils.gen_utils import num_range, parse_fps, compress_video, double_slowdown
+from torch_utils.gen_utils import num_range, parse_fps, compress_video, double_slowdown, make_run_dir, w_to_img
 
 import scipy
 import numpy as np
@@ -85,23 +85,25 @@ def create_image_grid(images, grid_size=None):
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
-@click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
+@click.option('--projected-w', help='Projection result file; can be either .npy or .npz files', type=click.Path(dir_okay=False), metavar='FILE')
 @click.option('--save-grid', help='Use flag to save image grid', is_flag=True, show_default=True)
 @click.option('--grid-width', '-gw', type=int, help='Grid width (number of columns)', default=None)
 @click.option('--grid-height', '-gh', type=int, help='Grid height (number of rows)', default=None)
-@click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
+@click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
+@click.option('--desc', type=str, help='Description name for the directory path to save results', default='generate-images', show_default=True)
 def generate_images(
-    ctx: click.Context,
-    network_pkl: str,
-    seeds: Optional[List[int]],
-    truncation_psi: float,
-    noise_mode: str,
-    save_grid: bool,
-    grid_width: int,
-    grid_height: int,
-    outdir: str,
-    class_idx: Optional[int],
-    projected_w: Optional[str]
+        ctx: click.Context,
+        network_pkl: str,
+        seeds: Optional[List[int]],
+        truncation_psi: float,
+        noise_mode: str,
+        save_grid: bool,
+        grid_width: int,
+        grid_height: int,
+        outdir: str,
+        desc: str,
+        class_idx: Optional[int],
+        projected_w: Optional[Union[str, os.PathLike]]
 ):
     """Generate images using pretrained network pickle.
 
@@ -109,22 +111,22 @@ def generate_images(
 
     \b
     # Generate curated MetFaces images without truncation (Fig.10 left)
-    python generate.py generate-images --outdir=out --trunc=1 --seeds=85,265,297,849 \\
+    python generate.py generate-images --trunc=1 --seeds=85,265,297,849 \\
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
 
     \b
     # Generate uncurated MetFaces images with truncation (Fig.12 upper left)
-    python generate.py generate-images --outdir=out --trunc=0.7 --seeds=600-605 \\
+    python generate.py generate-images --trunc=0.7 --seeds=600-605 \\
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
 
     \b
     # Generate class conditional CIFAR-10 images (Fig.17 left, Car)
-    python generate.py generate-images --outdir=out --seeds=0-35 --class=1 \\
+    python generate.py generate-images --seeds=0-35 --class=1 \\
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/cifar10.pkl
 
     \b
     # Render an image from projected W
-    python generate.py generate-images --outdir=out --projected_w=projected_w.npz \\
+    python generate.py generate-images --projected_w=projected_w.npz \\
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
     print(f'Loading networks from "{network_pkl}"...')
@@ -132,20 +134,26 @@ def generate_images(
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 
-    os.makedirs(outdir, exist_ok=True)
+    # Create the run dir with the given name description
+    run_dir = make_run_dir(outdir, desc)
 
     # Synthesize the result of a W projection.
     if projected_w is not None:
         if seeds is not None:
             print('warn: --seeds is ignored when using --projected-w')
         print(f'Generating images from projected W "{projected_w}"')
-        ws = np.load(projected_w)['w']
-        ws = torch.tensor(ws, device=device) # pylint: disable=not-callable
+        if projected_w.endswith('.npy'):
+            ws = np.load(projected_w)
+        elif projected_w.endswith('.npz'):
+            ws = np.load(projected_w)['w']
+        else:
+            ctx.fail(f'Projected W latent vector "{projected_w}" has wrong file format! Use either ".npy" or ".npz" formats.')
+        ws = torch.tensor(ws, device=device)
         assert ws.shape[1:] == (G.num_ws, G.w_dim)
+        n_digits = int(np.log10(len(ws))) + 1  # number of digits to correctly generate and save the .jpg images
         for idx, w in enumerate(ws):
-            img = G.synthesis(w.unsqueeze(0), noise_mode=noise_mode)
-            img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-            img = PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/proj{idx:02d}.jpg')
+            img = w_to_img(G, w, noise_mode)
+            PIL.Image.fromarray(img, 'RGB').save(f'{run_dir}/proj{idx:0{n_digits}d}.jpg')
         return
 
     if seeds is None:
@@ -167,19 +175,19 @@ def generate_images(
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
         img = G(z=z, c=label, truncation_psi=truncation_psi, noise_mode=noise_mode)
-        img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
+        img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
         if save_grid:
-            images.append(img[0].cpu().numpy())
-        PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/seed{seed:04d}.jpg')
+            images.append(img)
+        PIL.Image.fromarray(img, 'RGB').save(f'{run_dir}/seed{seed:04d}.jpg')
 
     if save_grid:
         print('Saving image grid...')
         # We let the function infer the shape of the grid
         if (grid_width, grid_height) == (None, None):
-            PIL.Image.fromarray(create_image_grid(np.array(images)), 'RGB').save(f'{outdir}/grid.png')
+            PIL.Image.fromarray(create_image_grid(np.array(images)), 'RGB').save(f'{run_dir}/grid.png')
         # The user tells the specific shape of the grid, but one value may be None
         elif None in (grid_width, grid_height):
-            PIL.Image.fromarray(create_image_grid(np.array(images), (grid_width, grid_height)), 'RGB').save(f'{outdir}/grid.png')
+            PIL.Image.fromarray(create_image_grid(np.array(images), (grid_width, grid_height)), 'RGB').save(f'{run_dir}/grid.png')
 
 
 # ----------------------------------------------------------------------------
@@ -209,7 +217,8 @@ def _parse_slowdown(slowdown: Union[str, int]) -> int:
 @click.option('--duration-sec', '-sec', type=float, help='Duration length of the video', default=30.0, show_default=True)
 @click.option('--fps', type=parse_fps, help='Video FPS.', default=30, show_default=True)
 @click.option('--compress', is_flag=True, help='Add flag to compress the final mp4 file via ffmpeg-python (same resolution, lower file size)')
-@click.option('--outdir', type=click.Path(), help='Where to save the output videos', required=True, metavar='DIR')
+@click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
+@click.option('--desc', type=str, help='Description name for the directory path to save results', default='random-video', show_default=True)
 def random_interpolation_video(
         ctx: click.Context,
         network_pkl: Union[str, os.PathLike],
@@ -223,6 +232,7 @@ def random_interpolation_video(
         duration_sec: float,
         fps: int,
         outdir: Union[str, os.PathLike],
+        desc: str,
         compress: bool,
         smoothing_sec: Optional[float] = 3.0  # for Gaussian blur; won't be a parameter, change at own risk
 ):
@@ -233,12 +243,12 @@ def random_interpolation_video(
 
     \b
     # Generate a 30-second long, untruncated MetFaces video at 30 FPS (3 rows and 2 columns; horizontal):
-    python generate.py random-video --outdir=out --seeds=0-5 \\
+    python generate.py random-video --seeds=0-5 \\
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
 
     \b
     # Generate a 60-second long, truncated 1x2 MetFaces video at 60 FPS (2 rows and 1 column; vertical):
-    python generate.py random-video --outdir=out --trunc=0.7 --seeds=10,20 --grid-width=1 --grid-height=2 \\
+    python generate.py random-video --trunc=0.7 --seeds=10,20 --grid-width=1 --grid-height=2 \\
         --fps=60 -sec=60 --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
 
     """
@@ -247,7 +257,8 @@ def random_interpolation_video(
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device)  # type: ignore
 
-    os.makedirs(outdir, exist_ok=True)
+    # Create the run dir with the given name description
+    run_dir = make_run_dir(outdir, desc)
 
     # Number of frames in the video and its total duration in seconds
     num_frames = int(np.rint(duration_sec * fps))
@@ -335,12 +346,12 @@ def random_interpolation_video(
     videoclip.set_duration(total_duration)
 
     # Change the video parameters (codec, bitrate) if you so desire
-    final_video = os.path.join(outdir, f'{mp4_name}.mp4')
+    final_video = os.path.join(run_dir, f'{mp4_name}.mp4')
     videoclip.write_videofile(final_video, fps=fps, codec='libx264', bitrate='16M')
 
     # Compress the video (lower file size, same resolution)
     if compress:
-        compress_video(original_video=final_video, original_video_name=mp4_name, outdir=outdir, ctx=ctx)
+        compress_video(original_video=final_video, original_video_name=mp4_name, outdir=run_dir, ctx=ctx)
 
 
 # ----------------------------------------------------------------------------

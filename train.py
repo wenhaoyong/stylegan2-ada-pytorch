@@ -21,6 +21,7 @@ from training import training_loop
 from metrics import metric_main
 from torch_utils import training_stats
 from torch_utils import custom_ops
+from torch_utils.gen_utils import make_run_dir
 
 #----------------------------------------------------------------------------
 
@@ -273,6 +274,7 @@ def setup_training_loop_kwargs(
             raise UserError('--augpipe cannot be specified with --aug=noaug')
         desc += f'-{augpipe}'
 
+    # TODO: is this ok? Should it only be done if we have vertical symmetry? I.e., use mirror-y
     augpipe_specs = {
         'blit':   dict(xflip=1, yflip=1, rotate90=1, xint=1),
         'geom':   dict(scale=1, rotate=1, aniso=1, xfrac=1),
@@ -410,10 +412,10 @@ class CommaSeparatedList(click.ParamType):
 @click.pass_context
 
 # General options.
-@click.option('--outdir', help='Where to save the results', required=True, metavar='DIR')
-@click.option('--gpus', help='Number of GPUs to use [default: 1]', type=int, metavar='INT')
-@click.option('--snap', help='Snapshot interval [default: 50 ticks]', type=int, metavar='INT')
-@click.option('--metrics', help='Comma-separated list or "none" [default: fid50k_full]', type=CommaSeparatedList())
+@click.option('--outdir', help='Where to save the results', type=click.Path(file_okay=False), default=os.path.join(os.getcwd(), 'training-runs'), show_default=True, metavar='DIR')
+@click.option('--gpus', help='Number of GPUs to use', type=click.IntRange(min=1, max=8), default=1, show_default=True, metavar='INT')
+@click.option('--snap', help='Snapshot interval in ticks', type=int, default=50, show_default=True, metavar='INT')
+@click.option('--metrics', help='Comma-separated list of metrics or "none" [default: fid50k_full]', type=CommaSeparatedList(), )
 @click.option('--seed', help='Random seed [default: 0]', type=int, metavar='INT')
 @click.option('-n', '--dry-run', help='Print training options and exit', is_flag=True)
 
@@ -446,7 +448,6 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--nobench', help='Disable cuDNN benchmarking', type=bool, metavar='BOOL')
 @click.option('--allow-tf32', help='Allow PyTorch to use TF32 internally', type=bool, metavar='BOOL')
 @click.option('--workers', help='Override number of DataLoader workers', type=int, metavar='INT')
-
 def main(ctx, outdir, dry_run, **config_kwargs):
     """Train a GAN using the techniques described in the paper
     "Training Generative Adversarial Networks with Limited Data".
@@ -505,15 +506,8 @@ def main(ctx, outdir, dry_run, **config_kwargs):
     except UserError as err:
         ctx.fail(err)
 
-    # Pick output directory.
-    prev_run_dirs = []
-    if os.path.isdir(outdir):
-        prev_run_dirs = [x for x in os.listdir(outdir) if os.path.isdir(os.path.join(outdir, x))]
-    prev_run_ids = [re.match(r'^\d+', x) for x in prev_run_dirs]
-    prev_run_ids = [int(x.group()) for x in prev_run_ids if x is not None]
-    cur_run_id = max(prev_run_ids, default=-1) + 1
-    args.run_dir = os.path.join(outdir, f'{cur_run_id:05d}-{run_desc}')
-    assert not os.path.exists(args.run_dir)
+    # Pick output directory and create it, if it's not a dry-run
+    args.run_dir = make_run_dir(outdir, run_desc, dry_run)
 
     # Print options.
     print()
@@ -536,9 +530,7 @@ def main(ctx, outdir, dry_run, **config_kwargs):
         print('Dry run; exiting.')
         return
 
-    # Create output directory.
-    print('Creating output directory...')
-    os.makedirs(args.run_dir)
+    # Save the training setup in a JSON file
     with open(os.path.join(args.run_dir, 'training_options.json'), 'wt') as f:
         json.dump(args, f, indent=2)
 

@@ -1,10 +1,12 @@
 import os
+import re
 from typing import List, Tuple, Union
 from collections import OrderedDict
 from locale import atof
 
 import click
 import numpy as np
+import torch
 
 
 # ----------------------------------------------------------------------------
@@ -156,11 +158,11 @@ def interpolate(
     # TODO: have a dictionary with easing functions that contains my 'smooth' one (might be useful for someone else)
     if smooth:
         # Smooth out the interpolation with a polynomial of order 3 (cubic function f)
-        # Constructed f by setting f'(0) = f'(1) = 0, and f(0) = 0, f(1) = 1 => f(t) = -2t^3+3t^2
-        t_array = t_array ** 2 * (3 - 2 * t_array)
+        # Constructed f by setting f'(0) = f'(1) = 0, and f(0) = 0, f(1) = 1 => f(t) = -2t^3+3t^2 = t^2 (3-2t)
+        t_array = t_array ** 2 * (3 - 2 * t_array)  # One line thanks to NumPy arrays
     # TODO: this might be possible to optimize by using the fact they're numpy arrays, but haven't found a nice way yet
     funcs_dict = {'linear': lerp, 'spherical': slerp}
-    vectors = np.array([funcs_dict[interp_type](t, v0, v1) for t in t_array])
+    vectors = np.array([funcs_dict[interp_type](t, v0, v1) for t in t_array], dtype=np.float32)
     return vectors
 
 
@@ -183,3 +185,35 @@ def double_slowdown(latents: np.ndarray, duration: float, frames: int) -> Tuple[
     # TODO: we could change this to any slowdown: slerp(1/slowdown, ...), and we return z, slowdown * duration, ...
     # Return the new latents, and the respective new duration and number of frames
     return z, 2 * duration, 2 * frames
+
+
+# ----------------------------------------------------------------------------
+
+
+def w_to_img(G, dlatent: torch.Tensor, noise_mode: str = 'const') -> np.ndarray:
+    synth_image = G.synthesis(dlatent.unsqueeze(0), noise_mode=noise_mode)
+    synth_image = (synth_image + 1) * (255/2)
+    synth_image = synth_image.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
+    return synth_image
+
+
+# ----------------------------------------------------------------------------
+
+
+def make_run_dir(outdir: Union[str, os.PathLike], desc: str, dry_run: bool = False) -> str:
+    """Reject modernity, return to automatically create the run dir."""
+    # Pick output directory.
+    prev_run_dirs = []
+    if os.path.isdir(outdir):  # sanity check, but click.Path() should clear this one
+        prev_run_dirs = [x for x in os.listdir(outdir) if os.path.isdir(os.path.join(outdir, x))]
+    prev_run_ids = [re.match(r'^\d+', x) for x in prev_run_dirs]
+    prev_run_ids = [int(x.group()) for x in prev_run_ids if x is not None]
+    cur_run_id = max(prev_run_ids, default=-1) + 1  # start with 00000
+    run_dir = os.path.join(outdir, f'{cur_run_id:05d}-{desc}')
+    assert not os.path.exists(run_dir)  # make sure it doesn't already exist
+
+    # Don't create the dir if it's a dry-run
+    if not dry_run:
+        print('Creating output directory...')
+        os.makedirs(run_dir)
+    return run_dir

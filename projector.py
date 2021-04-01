@@ -22,6 +22,10 @@ import torch.nn.functional as F
 import dnnlib
 import legacy
 
+from torch_utils.gen_utils import w_to_img, make_run_dir
+
+# ----------------------------------------------------------------------------
+
 
 def project(
         G,
@@ -36,19 +40,14 @@ def project(
         noise_ramp_length: float = 0.75,
         regularize_noise_weight: float = 1e5,
         project_in_wplus: bool = False,
-        verbose: bool = False,
         device: torch.device) -> torch.Tensor:
     """Projecting into W+ as opposed as the original repo. Should yield better results in general."""
     assert target.shape == (G.img_channels, G.img_resolution, G.img_resolution)
 
-    def logprint(*args):
-        if verbose:
-            print(*args)
-
     G = copy.deepcopy(G).eval().requires_grad_(False).to(device) # type: ignore
 
     # Compute w stats.
-    logprint(f'Computing W midpoint and stddev using {w_avg_samples} samples...')
+    print(f'Computing W midpoint and stddev using {w_avg_samples} samples...')
     z_samples = np.random.RandomState(123).randn(w_avg_samples, G.z_dim)
     w_samples = G.mapping(torch.from_numpy(z_samples).to(device), None)  # [N, L, C]
     if project_in_wplus:
@@ -59,7 +58,7 @@ def project(
         w_avg = np.mean(w_samples, axis=0, keepdims=True)  # [1, 1, C]
         w_std = (np.sum((w_samples - w_avg) ** 2) / w_avg_samples) ** 0.5
     # Setup noise inputs.
-    noise_bufs = { name: buf for (name, buf) in G.synthesis.named_buffers() if 'noise_const' in name }
+    noise_buffs = {name: buf for (name, buf) in G.synthesis.named_buffers() if 'noise_const' in name}
 
     # Load VGG16 feature detector.
     url = 'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/vgg16.pt'
@@ -72,15 +71,17 @@ def project(
         target_images = F.interpolate(target_images, size=(256, 256), mode='area')
     target_features = vgg16(target_images, resize_images=False, return_lpips=True)
 
-    w_opt = w_avg.clone().detach().requires_grad_(True).float().to(device)
+    w_opt = torch.tensor(w_avg, dtype=torch.float32, device=device, requires_grad=True)
     w_out = torch.zeros([num_steps] + list(w_opt.shape[1:]), dtype=torch.float32, device=device)
-    optimizer = torch.optim.Adam([w_opt] + list(noise_bufs.values()), betas=(0.9, 0.999), lr=initial_learning_rate)
+    optimizer = torch.optim.Adam([w_opt] + list(noise_buffs.values()), betas=(0.9, 0.999), lr=initial_learning_rate)
 
     # Init noise.
-    for buf in noise_bufs.values():
+    for buf in noise_buffs.values():
         buf[:] = torch.randn_like(buf)
         buf.requires_grad = True
 
+    best_dist = best_loss = np.inf
+    best_dist_step = best_loss_step = 0
     for step in range(num_steps):
         # Learning rate schedule.
         t = step / num_steps
@@ -111,7 +112,7 @@ def project(
 
         # Noise regularization.
         reg_loss = 0.0
-        for v in noise_bufs.values():
+        for v in noise_buffs.values():
             noise = v[None, None, :, :]  # must be [1,1,H,W] for F.avg_pool2d()
             while True:
                 reg_loss += (noise*torch.roll(noise, shifts=1, dims=3)).mean()**2
@@ -121,48 +122,65 @@ def project(
                 noise = F.avg_pool2d(noise, kernel_size=2)
         loss = dist + reg_loss * regularize_noise_weight
 
+        # See if these are the best loss and dist we've gotten so far
+        if dist < best_dist:
+            best_dist = dist
+            best_dist_step = step + 1
+        if loss < best_loss:
+            best_loss = loss
+            best_loss_step = step + 1
         # Step
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
-        logprint(f'step {step+1:>4d}/{num_steps}: dist {dist:<4.2f} loss {float(loss):<5.2f}')
+        # Print in the same line (avoid cluttering the commandline)
+        n_digits = int(np.log10(num_steps)) + 1 if num_steps > 0 else 1
+        print(f'step {step + 1:{n_digits}d}/{num_steps}: dist {dist:7.4f} | loss {float(loss):11.4f} - '
+              f'best dist step {best_dist_step:{n_digits}d} | best loss step {best_loss_step:{n_digits}d}', end='\r')
 
         # Save projected W for each optimization step.
         w_out[step] = w_opt.detach()[0]
 
         # Normalize noise.
         with torch.no_grad():
-            for buf in noise_bufs.values():
+            for buf in noise_buffs.values():
                 buf -= buf.mean()
                 buf *= buf.square().mean().rsqrt()
     if project_in_wplus:
-        return w_out
+        return w_out  # [num_steps, L, C]
     return w_out.repeat([1, G.mapping.num_ws, 1])  # [num_steps, 1, C] => [num_steps, L, C]
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 @click.command()
-@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
-@click.option('--target', 'target_fname', help='Target image file to project to', required=True, metavar='FILE')
-@click.option('--num-steps',              help='Number of optimization steps', type=int, default=1000, show_default=True)
-@click.option('--seed',                   help='Random seed', type=int, default=303, show_default=True)
-@click.option('--save-video',             help='Save an mp4 video of optimization progress', type=bool, default=True, show_default=True)
-@click.option('--project-in-wplus', '-wp', help='Project in the W+ latent space', is_flag=True)
-@click.option('--outdir',                 help='Where to save the output images', required=True, metavar='DIR')
+@click.option('--network', '-net', 'network_pkl', help='Network pickle filename', type=click.Path(exists=True, dir_okay=False), required=True)
+@click.option('--target', '-t', 'target_fname', help='Target image file to project to', type=click.Path(exists=True, dir_okay=False), required=True, metavar='FILE')
+@click.option('--num-steps', '-nsteps', help='Number of optimization steps', type=click.IntRange(min=0), default=1000, show_default=True)
+@click.option('--seed', help='Random seed', type=int, default=303, show_default=True)
+@click.option('--save-video', '-video', help='Save an mp4 video of optimization progress', is_flag=True)
+@click.option('--fps', help='FPS for the mp4 video of optimization progress', type=int, default=30, show_default=True)
+@click.option('--project-in-wplus', '-wplus', help='Project in the W+ latent space', is_flag=True)
+@click.option('--save-every-step', '-saveall', help='Save every step taken in the projection (npy and image).', is_flag=True)
+@click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
 def run_projection(
-    network_pkl: str,
-    target_fname: str,
-    outdir: str,
-    save_video: bool,
-    seed: int,
-    num_steps: int
+        network_pkl: str,
+        target_fname: str,
+        outdir: str,
+        save_video: bool,
+        seed: int,
+        num_steps: int,
+        fps: int,
+        project_in_wplus: bool,
+        save_every_step: bool
 ):
     """Project given image to the latent space of pretrained network pickle.
 
     Examples:
 
     \b
-    python projector.py --outdir=out --target=~/mytargetimg.png \\
+    python projector.py --target=~/mytargetimg.png --project-in-wplus --save-video --num-steps=1000 --save-every-step \\
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/ffhq.pkl
     """
     np.random.seed(seed)
@@ -172,7 +190,7 @@ def run_projection(
     print('Loading networks from "%s"...' % network_pkl)
     device = torch.device('cuda')
     with dnnlib.util.open_url(network_pkl) as fp:
-        G = legacy.load_network_pkl(fp)['G_ema'].requires_grad_(False).to(device) # type: ignore
+        G = legacy.load_network_pkl(fp)['G_ema'].requires_grad_(False).to(device)
 
     # Load target image.
     target_pil = PIL.Image.open(target_fname).convert('RGB')
@@ -186,37 +204,54 @@ def run_projection(
     start_time = perf_counter()
     projected_w_steps = project(
         G,
-        target=torch.tensor(target_uint8.transpose([2, 0, 1]), device=device), # pylint: disable=not-callable
+        target=torch.tensor(target_uint8.transpose([2, 0, 1]), device=device),
         num_steps=num_steps,
-        device=device,
-        verbose=True
+        project_in_wplus=project_in_wplus,
+        device=device
     )
-    print(f'Elapsed: {(perf_counter()-start_time):.1f} s')
+    print(f'\nElapsed: {(perf_counter()-start_time):.1f} s')
+
+    # Make the run dir automatically
+    desc = 'projection-wplus' if project_in_wplus else 'projection'
+    run_dir = make_run_dir(outdir, desc)
 
     # Render debug output: optional video and projected image and W vector.
-    os.makedirs(outdir, exist_ok=True)
+    result_name = os.path.join(run_dir, 'proj')
+    npy_name = os.path.join(run_dir, 'projected')
+    if project_in_wplus:
+        result_name, npy_name = f'{result_name}_wplus', f'{npy_name}_wplus'
+
     if save_video:
-        video = imageio.get_writer(f'{outdir}/proj.mp4', mode='I', fps=10, codec='libx264', bitrate='16M')
-        print(f'Saving optimization progress video "{outdir}/proj.mp4"')
+        video = imageio.get_writer(f'{result_name}.mp4', mode='I', fps=fps, codec='libx264', bitrate='16M')
+        print(f'Saving optimization progress video "{result_name}.mp4"')
         for projected_w in projected_w_steps:
-            synth_image = G.synthesis(projected_w.unsqueeze(0), noise_mode='const')
-            synth_image = (synth_image + 1) * (255/2)
-            synth_image = synth_image.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
-            video.append_data(np.concatenate([target_uint8, synth_image], axis=1))
+            synth_image = w_to_img(G, dlatent=projected_w, noise_mode='const')
+            video.append_data(np.concatenate([target_uint8, synth_image], axis=1))  # left side target, right projection
         video.close()
 
-    # Save final projected frame and W vector.
-    target_pil.save(f'{outdir}/target.png')
-    projected_w = projected_w_steps[-1]
-    synth_image = G.synthesis(projected_w.unsqueeze(0), noise_mode='const')
-    synth_image = (synth_image + 1) * (255/2)
-    synth_image = synth_image.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
-    PIL.Image.fromarray(synth_image, 'RGB').save(f'{outdir}/proj.png')
-    np.savez(f'{outdir}/projected_w.npz', w=projected_w.unsqueeze(0).cpu().numpy())
+    # Save the target image
+    target_pil.save(f'{run_dir}/target.jpg')
+    print('Saving projection results...')
+    if save_every_step:
+        # Save every projected frame and W vector.
+        n_digits = int(np.log10(num_steps)) + 1 if num_steps > 0 else 1
+        for step in range(num_steps):
+            w = projected_w_steps[step]
+            synth_image = w_to_img(G, dlatent=w, noise_mode='const')
+            PIL.Image.fromarray(synth_image, 'RGB').save(f'{result_name}_step{step:0{n_digits}d}.jpg')
+            np.save(f'{npy_name}_step{step:0{n_digits}d}.npy', w.unsqueeze(0).cpu().numpy())
+    else:
+        # Save only the final projected frame and W vector.
+        projected_w = projected_w_steps[-1]
+        synth_image = w_to_img(G, dlatent=projected_w, noise_mode='const')
+        PIL.Image.fromarray(synth_image, 'RGB').save(f'{result_name}_final.jpg')
+        np.save(f'{npy_name}_final.npy', projected_w.unsqueeze(0).cpu().numpy())
 
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+
 
 if __name__ == "__main__":
-    run_projection() # pylint: disable=no-value-for-parameter
+    run_projection()  # pylint: disable=no-value-for-parameter
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------

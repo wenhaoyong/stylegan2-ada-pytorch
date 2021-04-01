@@ -10,11 +10,11 @@
 
 import os
 from collections import OrderedDict
-from typing import List, Optional
+from typing import List, Union, Optional
 import click
 
 import dnnlib
-from torch_utils.gen_utils import parse_fps, compress_video
+from torch_utils.gen_utils import parse_fps, compress_video, make_run_dir
 
 import numpy as np
 import PIL.Image
@@ -90,10 +90,11 @@ def main():
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--rows', 'row_seeds', type=num_range, help='Random seeds to use for image rows', required=True)
 @click.option('--cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
-@click.option('--styles', 'col_styles', type=num_range, help='Style layer range', default='0-6', show_default=True)
+@click.option('--styles', 'col_styles', type=num_range, help='Style layers to use; can pass "coarse", "middle", "fine", or a list or range of ints', default='0-6', show_default=True)
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
-@click.option('--outdir', type=str, help='Directory path to save the results', required=True)
+@click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
+@click.option('--desc', type=str, help='Description name for the directory path to save results', default='style-mix-grid', show_default=True)
 def generate_style_mix(
         network_pkl: str,
         row_seeds: List[int],
@@ -101,14 +102,15 @@ def generate_style_mix(
         col_styles: List[int],
         truncation_psi: float,
         noise_mode: str,
-        outdir: str
+        outdir: str,
+        desc: str
 ):
     """Generate style-mixing images using pretrained network pickle.
 
     Examples:
 
     \b
-    python style_mixing.py grid --outdir=out --rows=85,100,75,458,1500 --cols=55,821,1789,293 \\
+    python style_mixing.py grid --rows=85,100,75,458,1500 --cols=55,821,1789,293 \\
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
     print(f'Loading networks from "{network_pkl}"...')
@@ -124,7 +126,8 @@ def generate_style_mix(
         click.secho('Removing col-styles exceeding this value...', fg='blue')
         col_styles[:] = [style for style in col_styles if style <= max_style]
 
-    os.makedirs(outdir, exist_ok=True)
+    # Create the run dir with the given name description
+    run_dir = make_run_dir(outdir, desc)
 
     print('Generating W vectors...')
     all_seeds = list(set(row_seeds + col_seeds))
@@ -149,9 +152,8 @@ def generate_style_mix(
             image_dict[(row_seed, col_seed)] = image[0].cpu().numpy()
 
     print('Saving images...')
-    os.makedirs(outdir, exist_ok=True)
     for (row_seed, col_seed), image in image_dict.items():
-        PIL.Image.fromarray(image, 'RGB').save(f'{outdir}/{row_seed}-{col_seed}.jpg')
+        PIL.Image.fromarray(image, 'RGB').save(f'{run_dir}/{row_seed}-{col_seed}.jpg')
 
     print('Saving image grid...')
     W = G.img_resolution
@@ -167,26 +169,27 @@ def generate_style_mix(
             if col_idx == 0:
                 key = (row_seed, row_seed)
             canvas.paste(PIL.Image.fromarray(image_dict[key], 'RGB'), (W * col_idx, H * row_idx))
-    canvas.save(os.path.join(outdir, 'grid.jpg'))
+    canvas.save(os.path.join(run_dir, 'grid.jpg'))
 
 
 # ----------------------------------------------------------------------------
 
 
-@main.command()
-@click.context
+@main.command(name='video')
+@click.pass_context
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
-@click.option('--row', 'row_seed', type=int, help='Random seed to use for video row', required=True)
-@click.option('--cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
-@click.option('--styles', 'col_styles', type=num_range, help='Style layer range', default='0-6', show_default=True)
+@click.option('--row-seed', '-row', 'row_seed', type=int, help='Random seed to use for video row', required=True)
+@click.option('--col-seeds', '-cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
+@click.option('--styles', 'col_styles', type=num_range, help='Style layers to use; can pass "coarse", "middle", "fine", or a list or range of ints', default='0-6', show_default=True)
 @click.option('--only-stylemix', is_flag=True, help='Add flag to only show the style-mixed images in the video')
 @click.option('--compress', is_flag=True, help='Add flag to compress the final mp4 file via ffmpeg-python (same resolution, lower file size)')
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--noise-mode', type=click.Choice(['const', 'random', 'none']), help='Noise mode', default='const', show_default=True)
 @click.option('--duration-sec', type=float, help='Duration of the video in seconds', default=30, show_default=True)
 @click.option('--fps', type=parse_fps, help='Video FPS.', default=30, show_default=True)
-@click.option('--outdir', type=str, help='Directory path to save the results', required=True)
-def video(
+@click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
+@click.option('--desc', type=str, help='Description name for the directory path to save results', default='style-mix-video', show_default=True)
+def random_stylemix_video(
         ctx: click.Context,
         network_pkl: str,
         row_seed: int,
@@ -198,7 +201,8 @@ def video(
         noise_mode: str,
         fps: int,
         duration_sec: float,
-        outdir: str,
+        outdir: Union[str, os.PathLike],
+        desc: str,
         smoothing_sec: Optional[float] = 3.0  # for Gaussian blur; won't be a parameter, change at own risk
 ):
     """Generate random style-mixing video using pretrained network pickle.
@@ -206,11 +210,11 @@ def video(
         Examples:
 
         \b
-        python style_mixing.py video --outdir=out --row=85 --cols=55,821,1789 --fps=60 \\
+        python style_mixing.py video --row=85 --cols=55,821,1789 --fps=60 \\
             --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
 
         \b
-        python style_mixing.py video --outdir=out --row=0 --cols=7-10 --styles=fine --duration-sec=60 \\
+        python style_mixing.py video --row=0 --cols=7-10 --styles=fine --duration-sec=60 \\
             --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
     # Calculate number of frames
@@ -231,8 +235,8 @@ def video(
         click.secho('Removing col-styles exceeding this value...', fg='blue')
         col_styles[:] = [style for style in col_styles if style <= max_style]
 
-    # TODO: Reject outdir set by user, return to ProGAN/SGAN/SGAN2 era
-    os.makedirs(outdir, exist_ok=True)
+    # Create the run dir with the given name description
+    run_dir = make_run_dir(outdir, desc)
 
     # First column (video) latents
     print('Generating source W vectors...')
@@ -332,12 +336,12 @@ def video(
     videoclip.set_duration(duration_sec)
 
     # Change the video parameters (codec, bitrate) if you so desire
-    final_video = os.path.join(outdir, f'{mp4_name}.mp4')
+    final_video = os.path.join(run_dir, f'{mp4_name}.mp4')
     videoclip.write_videofile(final_video, fps=fps, codec='libx264', bitrate='16M')
 
     # Compress the video (lower file size, same resolution)
     if compress:
-        compress_video(original_video=final_video, original_video_name=mp4_name, outdir=outdir, ctx=ctx)
+        compress_video(original_video=final_video, original_video_name=mp4_name, outdir=run_dir, ctx=ctx)
 
 
 # ----------------------------------------------------------------------------
