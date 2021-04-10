@@ -1,12 +1,55 @@
 import os
 import re
-from typing import List, Tuple, Union
+import json
+
+from typing import List, Tuple, Union, Optional
 from collections import OrderedDict
 from locale import atof
 
 import click
 import numpy as np
 import torch
+
+
+# ----------------------------------------------------------------------------
+
+
+def create_image_grid(images: np.ndarray, grid_size: Optional[Tuple[int, int]] = None):
+    """
+    Create a grid with the fed images
+    Args:
+        images (np.array): array of images
+        grid_size (tuple(int)): size of grid (grid_width, grid_height)
+    Returns:
+        grid (np.array): image grid of size grid_size
+    """
+    # Sanity check
+    assert images.ndim == 3 or images.ndim == 4, f'Images has {images.ndim} dimensions (shape: {images.shape})!'
+    num, img_h, img_w, c = images.shape
+    # If user specifies the grid shape, use it
+    if grid_size is not None:
+        grid_w, grid_h = tuple(grid_size)
+        # If one of the sides is None, then we must infer it
+        if grid_w is None:
+            grid_w = num // grid_h + 1
+        elif grid_h is None:
+            grid_h = num // grid_w + 1
+
+    # Otherwise, we can infer it by the number of images (priority is given to grid_w)
+    else:
+        grid_w = max(int(np.ceil(np.sqrt(num))), 1)
+        grid_h = max((num - 1) // grid_w + 1, 1)
+
+    # Sanity check
+    assert grid_w * grid_h >= num, 'Number of rows and columns must be greater than the number of images!'
+    # Get the grid
+    grid = np.zeros([grid_h * img_h, grid_w * img_h] + list(images.shape[-1:]), dtype=images.dtype)
+    # Paste each image in the grid
+    for idx in range(num):
+        x = (idx % grid_w) * img_w
+        y = (idx // grid_w) * img_h
+        grid[y:y + img_h, x:x + img_w, ...] = images[idx]
+    return grid
 
 
 # ----------------------------------------------------------------------------
@@ -126,7 +169,7 @@ def slerp(
     # Normalize the vectors to get the directions and angles
     v0 = v0 / np.linalg.norm(v0)
     v1 = v1 / np.linalg.norm(v1)
-    # Dot product with the normalized vectors (can't always use np.dot, so we use the definition)
+    # Dot product with the normalized vectors (can't always use np.dot, so we use the definition)get_w_from_file(dl) for dl in desired_path
     dot = np.sum(v0 * v1)
     # If it's ~1, vectors are ~colineal, so use lerp
     if np.abs(dot) > dot_threshold:
@@ -180,7 +223,7 @@ def double_slowdown(latents: np.ndarray, duration: float, frames: int) -> Tuple[
         z[2 * i] = latents[i]
     # Interpolate in the odd frames
     for i in range(1, len(z), 2):
-        # slerp between (t=0.5) even frames; for the last frame, we loop to the first one
+        # slerp between (t=0.5) even frames; for the last frame, we loop to the first one (z[0])
         z[i] = slerp(0.5, z[i - 1], z[i + 1]) if i != len(z) - 1 else slerp(0.5, z[0], z[i - 1])
     # TODO: we could change this to any slowdown: slerp(1/slowdown, ...), and we return z, slowdown * duration, ...
     # Return the new latents, and the respective new duration and number of frames
@@ -190,11 +233,39 @@ def double_slowdown(latents: np.ndarray, duration: float, frames: int) -> Tuple[
 # ----------------------------------------------------------------------------
 
 
-def w_to_img(G, dlatent: torch.Tensor, noise_mode: str = 'const') -> np.ndarray:
-    synth_image = G.synthesis(dlatent.unsqueeze(0), noise_mode=noise_mode)
+def z_to_img(G, latents: torch.Tensor, label: torch.Tensor, truncation_psi: float, noise_mode: str = 'const'):
+    """Get an image/np.ndarray from a latent Z using G, the label, truncation_psi, and noise_mode"""
+    img = G(z=latents, c=label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+    img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
+    return img  # use img[0] for a single image
+
+
+def w_to_img(G, dlatents: torch.Tensor, noise_mode: str = 'const') -> np.ndarray:
+    """Get an image/np.ndarray from a dlatent W using G and the selected noise_mode"""
+    if len(dlatents.shape) == 2:
+        dlatents = dlatents.unsqueeze(0)
+    synth_image = G.synthesis(dlatents, noise_mode=noise_mode)
     synth_image = (synth_image + 1) * (255/2)
-    synth_image = synth_image.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
-    return synth_image
+    synth_image = synth_image.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).cpu().numpy()
+    return synth_image  # use synth_image[0] for a single image
+
+
+def get_w_from_file(file: Union[str, os.PathLike]) -> np.ndarray:
+    """Get dlatent (w) from a .npy or .npz file"""
+    filename, file_extension = os.path.splitext(file)
+    assert file_extension in ['.npy', '.npz'], f'"{file}" has wrong file format! Use either ".npy" or ".npz"'
+    if file_extension == '.npy':
+        return np.load(file)
+    return np.load(file)['w']
+
+
+# ----------------------------------------------------------------------------
+
+
+def save_config(ctx: click.Context, run_dir: Union[str, os.PathLike], save_name: str = 'config.json') -> None:
+    """Save the configuration stored in ctx.obj into a JSON file at the output directory."""
+    with open(os.path.join(run_dir, save_name), 'w') as f:
+        json.dump(ctx.obj, f, indent=4, sort_keys=True)
 
 
 # ----------------------------------------------------------------------------

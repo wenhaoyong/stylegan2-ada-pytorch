@@ -14,7 +14,7 @@ from typing import List, Union, Optional
 import click
 
 import dnnlib
-from torch_utils.gen_utils import parse_fps, compress_video, make_run_dir
+from torch_utils.gen_utils import parse_fps, compress_video, make_run_dir, w_to_img
 
 import numpy as np
 import PIL.Image
@@ -87,14 +87,14 @@ def main():
 
 
 @main.command(name='grid')
-@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
-@click.option('--rows', 'row_seeds', type=num_range, help='Random seeds to use for image rows', required=True)
-@click.option('--cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
+@click.option('--network', 'network_pkl', type=click.Path(exists=True, dir_okay=False), help='Network pickle filename', required=True)
+@click.option('--row-seeds', '-rows', 'row_seeds', type=num_range, help='Random seeds to use for image rows', required=True)
+@click.option('--col-seeds', '-cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
 @click.option('--styles', 'col_styles', type=num_range, help='Style layers to use; can pass "coarse", "middle", "fine", or a list or range of ints', default='0-6', show_default=True)
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
-@click.option('--desc', type=str, help='Description name for the directory path to save results', default='style-mix-grid', show_default=True)
+@click.option('--desc', type=str, help='Description name for the directory path to save results', default='stylemix-grid', show_default=True)
 def generate_style_mix(
         network_pkl: str,
         row_seeds: List[int],
@@ -138,8 +138,7 @@ def generate_style_mix(
     w_dict = {seed: w for seed, w in zip(all_seeds, list(all_w))}
 
     print('Generating images...')
-    all_images = G.synthesis(all_w, noise_mode=noise_mode)
-    all_images = (all_images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
+    all_images = w_to_img(G, all_w, noise_mode)
     image_dict = {(seed, seed): image for seed, image in zip(all_seeds, list(all_images))}
 
     print('Generating style-mixed images...')
@@ -147,9 +146,8 @@ def generate_style_mix(
         for col_seed in col_seeds:
             w = w_dict[row_seed].clone()
             w[col_styles] = w_dict[col_seed][col_styles]
-            image = G.synthesis(w[np.newaxis], noise_mode=noise_mode)
-            image = (image.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-            image_dict[(row_seed, col_seed)] = image[0].cpu().numpy()
+            image = w_to_img(G, w, noise_mode)[0]
+            image_dict[(row_seed, col_seed)] = image
 
     print('Saving images...')
     for (row_seed, col_seed), image in image_dict.items():
@@ -177,7 +175,7 @@ def generate_style_mix(
 
 @main.command(name='video')
 @click.pass_context
-@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
+@click.option('--network', 'network_pkl', type=click.Path(exists=True, dir_okay=False),help='Network pickle filename', required=True)
 @click.option('--row-seed', '-row', 'row_seed', type=int, help='Random seed to use for video row', required=True)
 @click.option('--col-seeds', '-cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
 @click.option('--styles', 'col_styles', type=num_range, help='Style layers to use; can pass "coarse", "middle", "fine", or a list or range of ints', default='0-6', show_default=True)
@@ -188,7 +186,7 @@ def generate_style_mix(
 @click.option('--duration-sec', type=float, help='Duration of the video in seconds', default=30, show_default=True)
 @click.option('--fps', type=parse_fps, help='Video FPS.', default=30, show_default=True)
 @click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
-@click.option('--desc', type=str, help='Description name for the directory path to save results', default='style-mix-video', show_default=True)
+@click.option('--desc', type=str, help='Description name for the directory path to save results', default='stylemix-video', show_default=True)
 def random_stylemix_video(
         ctx: click.Context,
         network_pkl: str,
@@ -284,8 +282,7 @@ def random_stylemix_video(
                 # Replace the values defined by col_styles
                 w_col[:, col_styles] = src_w[frame_idx, col_styles]
                 # Generate the style-mixed images
-                col_images = G.synthesis(w_col, noise_mode=noise_mode)
-                col_images = (col_images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
+                col_images = w_to_img(G, w_col, noise_mode)
                 # Paste them in their respective spot in the grid
                 for row, image in enumerate(list(col_images)):
                     canvas.paste(PIL.Image.fromarray(image, 'RGB'), (col * H, row * W))
@@ -299,8 +296,7 @@ def random_stylemix_video(
         canvas = PIL.Image.new('RGB', (W * (len(col_seeds) + 1), H * (len([row_seed]) + 1)), 'black')
 
         # Generate all destination images (first row; static images)
-        dst_images = G.synthesis(dst_w, noise_mode=noise_mode)
-        dst_images = (dst_images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
+        dst_images = w_to_img(G, dst_w, noise_mode)
         # Paste them in the canvas
         for col, dst_image in enumerate(list(dst_images)):
             canvas.paste(PIL.Image.fromarray(dst_image, 'RGB'), ((col + 1) * H, 0))
@@ -309,8 +305,7 @@ def random_stylemix_video(
             # Get the frame number according to time t
             frame_idx = int(np.clip(np.round(t * fps), 0, num_frames - 1))
             # Get the image at this frame (first column; video)
-            src_image = G.synthesis(src_w[frame_idx].unsqueeze(0), noise_mode=noise_mode)  # [18, 512] -> [1, 18, 512]
-            src_image = (src_image.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()[0]
+            src_image = w_to_img(G, src_w[frame_idx], noise_mode)[0]
             # Paste it to the lower left
             canvas.paste(PIL.Image.fromarray(src_image, 'RGB'), (0, H))
 
@@ -321,8 +316,7 @@ def random_stylemix_video(
                 # Replace the values defined by col_styles
                 w_col[:, col_styles] = src_w[frame_idx, col_styles]
                 # Generate these style-mixed images
-                col_images = G.synthesis(w_col, noise_mode=noise_mode)
-                col_images = (col_images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
+                col_images = w_to_img(G, w_col, noise_mode)
                 # Paste them in their respective spot in the grid
                 for row, image in enumerate(list(col_images)):
                     canvas.paste(PIL.Image.fromarray(image, 'RGB'), ((col + 1) * H, (row + 1) * W))
