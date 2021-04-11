@@ -78,18 +78,22 @@ def num_range(s: str) -> List[int]:
             try:
                 lower, upper = int(a), int(b)
             except ValueError:
-                print(f'One of the elements in "{s}" is not an int!')
+                print(f'Upper and lower bounds of "{el}" in "{s}" should be ints!')
                 raise
-            # Sanity check 1: accept 'a-b' or 'b-a', with a<=b
+            # Sanity check 1: accept ranges 'a-b' or 'b-a', with a<=b
             if lower <= upper:
                 r = [n for n in range(lower, upper + 1)]
             else:
                 r = [n for n in range(upper, lower + 1)]
-            # We will extend nums (r is also a list)
+            # We will extend nums as r is also a list
             nums.extend(r)
         else:
-            # It's a single number, so just append it
-            nums.append(int(el))
+            # It's a single number, so just append it (if it's an int)
+            try:
+                nums.append(int(el))
+            except ValueError:
+                print(f'"{el}" in "{s}" is not an int!')
+                raise
     # Sanity check 2: delete repeating numbers, but keep order given by user
     nums = list(OrderedDict.fromkeys(nums))
     return nums
@@ -160,7 +164,9 @@ def slerp(
 
     dot_threshold is the threshold for considering if the two vectors are collinear (not recommended to alter).
 
-    Adapted from the Python code at: https://en.wikipedia.org/wiki/Slerp
+    Adapted from the Python code at: https://en.wikipedia.org/wiki/Slerp (at the time, now no longer available).
+    Most likely taken from Jonathan Blow's code in C++:
+            http://number-none.com/product/Understanding%20Slerp,%20Then%20Not%20Using%20It
     """
     t, v0, v1 = interpolation_checks(t, v0, v1)
     # Copy vectors to reuse them later
@@ -169,11 +175,13 @@ def slerp(
     # Normalize the vectors to get the directions and angles
     v0 = v0 / np.linalg.norm(v0)
     v1 = v1 / np.linalg.norm(v1)
-    # Dot product with the normalized vectors (can't always use np.dot, so we use the definition)get_w_from_file(dl) for dl in desired_path
+    # Dot product with the normalized vectors (can't always use np.dot, so we use the definition)
     dot = np.sum(v0 * v1)
     # If it's ~1, vectors are ~colineal, so use lerp
     if np.abs(dot) > dot_threshold:
         return lerp(t, v0, v1)
+    # Stay within domain of arccos
+    dot = np.clip(dot, -1.0, 1.0)
     # Calculate initial angle between v0 and v1
     theta_0 = np.arccos(dot)
     sin_theta_0 = np.sin(theta_0)

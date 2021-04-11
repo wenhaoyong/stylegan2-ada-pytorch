@@ -12,7 +12,6 @@ import os
 from typing import List, Optional, Union
 from locale import atof
 import click
-import imageio
 
 import dnnlib
 from torch_utils.gen_utils import num_range, parse_fps, compress_video, double_slowdown, \
