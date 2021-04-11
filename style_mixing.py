@@ -87,7 +87,7 @@ def main():
 
 
 @main.command(name='grid')
-@click.option('--network', 'network_pkl', type=click.Path(exists=True, dir_okay=False), help='Network pickle filename', required=True)
+@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--row-seeds', '-rows', 'row_seeds', type=num_range, help='Random seeds to use for image rows', required=True)
 @click.option('--col-seeds', '-cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
 @click.option('--styles', 'col_styles', type=num_range, help='Style layers to use; can pass "coarse", "middle", "fine", or a list or range of ints', default='0-6', show_default=True)
@@ -175,7 +175,7 @@ def generate_style_mix(
 
 @main.command(name='video')
 @click.pass_context
-@click.option('--network', 'network_pkl', type=click.Path(exists=True, dir_okay=False),help='Network pickle filename', required=True)
+@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--row-seed', '-row', 'row_seed', type=int, help='Random seed to use for video row', required=True)
 @click.option('--col-seeds', '-cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
 @click.option('--styles', 'col_styles', type=num_range, help='Style layers to use; can pass "coarse", "middle", "fine", or a list or range of ints', default='0-6', show_default=True)

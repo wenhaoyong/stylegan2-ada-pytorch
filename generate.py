@@ -41,7 +41,7 @@ def main():
 
 @main.command(name='images')
 @click.pass_context
-@click.option('--network', 'network_pkl', type=click.Path(exists=True, dir_okay=False), help='Network pickle filename', required=True)
+@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--seeds', type=num_range, help='List of random seeds')
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
@@ -162,7 +162,7 @@ def _parse_slowdown(slowdown: Union[str, int]) -> int:
 
 @main.command(name='random-video')
 @click.pass_context
-@click.option('--network', 'network_pkl', type=click.Path(exists=True, dir_okay=False), help='Network pickle filename', required=True)
+@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--seeds', type=num_range, help='List of random seeds', required=True)
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')

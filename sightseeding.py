@@ -61,7 +61,7 @@ def _parse_seeds(s: str) -> List[int]:
 
 @click.command()
 @click.pass_context
-@click.option('--network', '-net', 'network_pkl', type=click.Path(exists=True), help='Network pickle filename', required=True)
+@click.option('--network', '-net', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--seeds', '-s', type=_parse_seeds, help='List of seeds to visit in order ("a,b,c", "a-b", "a,b-c,d,e-f,a", ...', required=True)
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
