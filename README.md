@@ -9,6 +9,9 @@ This README will eventually be updated to correctly show how to run the followin
   [StyleGAN2](https://github.com/PDillis/stylegan2-fun#random-interpolation) (only the name changes).
 * **Style mixing videos**: Run `python style_mixing.py video --help` on how to run it, but usage is similar as in 
   [StyleGAN2](https://github.com/PDillis/stylegan2-fun#style-mixing-video).
+* **Sightseeding**: Interpolate between pre-selected seeds in either latent space. Run `python sightseeding.py --help` 
+  for an example on how to run it. Read [here](https://github.com/PDillis/stylegan2-fun#sightseeding) for more
+  details.
 * **Vertical mirroring for training**: Use `--mirror-y=True` when training your model to mirror your training images along the horizontal axis.
 * [**Project in W+**](https://arxiv.org/abs/1904.03189): Use `--project-in-wplus` when running `projector.py` to project 
   in the W+ latent space. Use `--help` for better guidance for now.
@@ -21,8 +24,8 @@ the projection video as different `.jpg` files, as well as the projected disenta
 * [ ] Update this README for a better user experience
 * [ ] Create multi-crop and cut-crop for fully utilizing every image in the dataset (in lieu of center-crop).
 * [ ] Automatically generate classes in a dataset for training a class-conditional StyleGAN2
-* [ ] Add more interpolation options ([sightseeding](https://github.com/PDillis/stylegan2-fun#sightseeding), 
-  [circular](https://github.com/PDillis/stylegan2-fun#circular-interpolation), etc.) 
+* [ ] Add more interpolation options (sightseeding is done, missing 
+  [circular](https://github.com/PDillis/stylegan2-fun#circular-interpolation), among others) 
 * [ ] Let users train rectangular models.
 
 ## StyleGAN2-ADA &mdash; Official PyTorch implementation

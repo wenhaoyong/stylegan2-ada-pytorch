@@ -94,8 +94,9 @@ def sightseeding(
     Examples:
 
     # Will go from seeds 0 through 5, coming to the starting one in the end; the transition between each pair of seeds
-    taking 7.5 seconds, spherically (and smoothly) interpolating in W, compressing the video in the with ffmpeg-python
-    python sightseeding.py --seeds=0-5,0 --seed-sec=7.5 --smooth --compress
+    taking 7.5 seconds, spherically (and smoothly) interpolating in W, compressing the final video with ffmpeg-python
+
+    python sightseeding.py --seeds=0-5,0 --seed-sec=7.5 --smooth --compress \
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/afhqwild.pkl
     """
     # Sanity check:
@@ -181,11 +182,11 @@ def sightseeding(
     print('Generating sightseeding video...')
     videoclip = moviepy.editor.VideoClip(make_frame, duration=duration_sec)
     videoclip.set_duration(duration_sec)
-    mp4_name = '-'.join(map(str, seeds))
-    mp4_name = f'{mp4_name}-sightseeding.mp4' if len(mp4_name) < 50 else 'sightseeding.mp4'
+    mp4_name = '-'.join(map(str, seeds))  # Make it clear by the file name what is the path taken
+    mp4_name = f'{mp4_name}-sightseeding' if len(mp4_name) < 50 else 'sightseeding'  # arbitrary rule of mine
 
     # Set the video parameters (change if you like)
-    final_video = os.path.join(run_dir, mp4_name)
+    final_video = os.path.join(run_dir, f'{mp4_name}.mp4')
     videoclip.write_videofile(final_video, fps=fps, codec='libx264', bitrate='16M')
 
     # Compress the video (lower file size, same resolution)
