@@ -42,6 +42,8 @@ def main():
 @main.command(name='images')
 @click.pass_context
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
+@click.option('--recreate-snapshot-grid', 'training_snapshot', is_flag=True, help='Add flag if you wish to recreate the snapshot grid created during training')
+@click.option('--snapshot-size', type=click.Choice(['1080p', '4k', '8k']), help='Size of the snapshot', default='4k', show_default=True)
 @click.option('--seeds', type=num_range, help='List of random seeds')
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
@@ -55,6 +57,8 @@ def main():
 def generate_images(
         ctx: click.Context,
         network_pkl: str,
+        training_snapshot: bool,
+        snapshot_size: str,
         seeds: Optional[List[int]],
         truncation_psi: float,
         noise_mode: str,
@@ -93,7 +97,7 @@ def generate_images(
     print(f'Loading networks from "{network_pkl}"...')
     device = torch.device('cuda')
     with dnnlib.util.open_url(network_pkl) as f:
-        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+        G = legacy.load_network_pkl(f)['G_ema'].to(device)  # type: ignore
 
     # Create the run dir with the given name description
     run_dir = make_run_dir(outdir, desc)
@@ -103,17 +107,18 @@ def generate_images(
         if seeds is not None:
             print('warn: --seeds is ignored when using --projected-w')
         print(f'Generating images from projected W "{projected_w}"')
-        ws = get_w_from_file(projected_w)
+        ws, ext = get_w_from_file(projected_w, return_ext=True)
         ws = torch.tensor(ws, device=device)
         assert ws.shape[1:] == (G.num_ws, G.w_dim)
         n_digits = int(np.log10(len(ws))) + 1  # number of digits for naming the .jpg images
-        for idx, w in enumerate(ws):
-            img = w_to_img(G, w, noise_mode)
-            PIL.Image.fromarray(img, 'RGB').save(f'{run_dir}/proj{idx:0{n_digits}d}.jpg')
+        if ext == '.npy':
+            img = w_to_img(G, ws, noise_mode)[0]
+            PIL.Image.fromarray(img, 'RGB').save(f'{run_dir}/proj.jpg')
+        else:
+            for idx, w in enumerate(ws):
+                img = w_to_img(G, w, noise_mode)[0]
+                PIL.Image.fromarray(img, 'RGB').save(f'{run_dir}/proj{idx:0{n_digits}d}.jpg')
         return
-
-    if seeds is None:
-        ctx.fail('--seeds option is required when not using --projected-w')
 
     # Labels.
     label = torch.zeros([1, G.c_dim], device=device)
@@ -125,25 +130,47 @@ def generate_images(
         if class_idx is not None:
             print('warn: --class=lbl ignored when running on an unconditional network')
 
-    # Generate images.
-    images = []
-    for seed_idx, seed in enumerate(seeds):
-        print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
-        z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-        img = z_to_img(G, z, label, truncation_psi, noise_mode)[0]
-        if save_grid:
-            images.append(img)
-        PIL.Image.fromarray(img, 'RGB').save(f'{run_dir}/seed{seed:04d}.jpg')
+    if training_snapshot:
+        print('Recreating the snapshot grid...')
+        size_dict = {'1080p': (1920, 1080, 3, 2), '4k': (3840, 2160, 7, 4), '8k': (7680, 4320, 7, 4)}
+        grid_width = np.clip(size_dict[snapshot_size][0] // G.img_resolution, size_dict[snapshot_size][2], 32)
+        grid_height = np.clip(size_dict[snapshot_size][1] // G.img_resolution, size_dict[snapshot_size][3], 32)
+        num_images = grid_width * grid_height
 
-    if save_grid:
-        print('Saving image grid...')
-        # We let the function infer the shape of the grid
-        if (grid_width, grid_height) == (None, None):
-            PIL.Image.fromarray(create_image_grid(np.array(images)), 'RGB').save(f'{run_dir}/grid.png')
-        # The user tells the specific shape of the grid, but one value may be None
-        elif None in (grid_width, grid_height):
-            PIL.Image.fromarray(create_image_grid(np.array(images), (grid_width, grid_height)),
-                                'RGB').save(f'{run_dir}/grid.png')
+        grid_z = np.random.RandomState(0).randn(num_images, G.z_dim)
+        grid_img = z_to_img(G, torch.from_numpy(grid_z).to(device), label, truncation_psi, noise_mode)
+        PIL.Image.fromarray(create_image_grid(grid_img, (grid_width, grid_height)),
+                            'RGB').save(os.path.join(run_dir, 'fakes.jpg'))
+        print('Saving individual images...')
+        for idx, z in enumerate(grid_z):
+            z = torch.from_numpy(z).unsqueeze(0).to(device)
+            img = z_to_img(G, z, label, truncation_psi, noise_mode)[0]
+            PIL.Image.fromarray(img, 'RGB').save(os.path.join(run_dir, f'img{idx:04d}.jpg'))
+            np.save()
+    else:
+        if seeds is None:
+            ctx.fail('--seeds option is required when not using --projected-w')
+
+        # Generate images.
+        images = []
+        for seed_idx, seed in enumerate(seeds):
+            print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
+            z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+            img = z_to_img(G, z, label, truncation_psi, noise_mode)[0]
+            if save_grid:
+                images.append(img)
+            PIL.Image.fromarray(img, 'RGB').save(os.path.join(run_dir, f'seed{seed:04d}.jpg'))
+
+        if save_grid:
+            print('Saving image grid...')
+            # We let the function infer the shape of the grid
+            if (grid_width, grid_height) == (None, None):
+                PIL.Image.fromarray(create_image_grid(np.array(images)),
+                                    'RGB').save(os.path.join(run_dir, 'grid.jpg'))
+            # The user tells the specific shape of the grid, but one value may be None
+            elif None in (grid_width, grid_height):
+                PIL.Image.fromarray(create_image_grid(np.array(images), (grid_width, grid_height)),
+                                    'RGB').save(os.path.join(run_dir, 'grid.jpg'))
 
 
 # ----------------------------------------------------------------------------

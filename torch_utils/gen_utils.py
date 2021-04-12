@@ -258,13 +258,15 @@ def w_to_img(G, dlatents: torch.Tensor, noise_mode: str = 'const') -> np.ndarray
     return synth_image  # use synth_image[0] for a single image
 
 
-def get_w_from_file(file: Union[str, os.PathLike]) -> np.ndarray:
+def get_w_from_file(file: Union[str, os.PathLike], return_ext: bool = False) -> Tuple[np.ndarray, Optional[str]]:
     """Get dlatent (w) from a .npy or .npz file"""
     filename, file_extension = os.path.splitext(file)
     assert file_extension in ['.npy', '.npz'], f'"{file}" has wrong file format! Use either ".npy" or ".npz"'
     if file_extension == '.npy':
-        return np.load(file)
-    return np.load(file)['w']
+        r = (np.load(file), '.npy') if return_ext else np.load(file)
+        return r
+    r = (np.load(file)['w'], '.npz') if return_ext else np.load(file)['w']
+    return r
 
 
 # ----------------------------------------------------------------------------
