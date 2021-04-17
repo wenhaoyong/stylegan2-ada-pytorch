@@ -15,7 +15,7 @@ import click
 
 import dnnlib
 from torch_utils.gen_utils import num_range, parse_fps, compress_video, double_slowdown, \
-    make_run_dir, z_to_img, w_to_img, get_w_from_file, create_image_grid
+    make_run_dir, z_to_img, w_to_img, get_w_from_file, create_image_grid, save_config
 
 import scipy
 import numpy as np
@@ -53,7 +53,7 @@ def main():
 @click.option('--grid-width', '-gw', type=int, help='Grid width (number of columns)', default=None)
 @click.option('--grid-height', '-gh', type=int, help='Grid height (number of rows)', default=None)
 @click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
-@click.option('--desc', type=str, help='Description name for the directory path to save results', default='generate-images', show_default=True)
+@click.option('--description', '-desc', type=str, help='Description name for the directory path to save results', default='generate-images', show_default=True)
 def generate_images(
         ctx: click.Context,
         network_pkl: str,
@@ -66,7 +66,7 @@ def generate_images(
         grid_width: int,
         grid_height: int,
         outdir: str,
-        desc: str,
+        description: str,
         class_idx: Optional[int],
         projected_w: Optional[Union[str, os.PathLike]]
 ):
@@ -99,8 +99,9 @@ def generate_images(
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device)  # type: ignore
 
+    description = 'generate-images' if len(description) == 0 else description
     # Create the run dir with the given name description
-    run_dir = make_run_dir(outdir, desc)
+    run_dir = make_run_dir(outdir, description)
 
     # Synthesize the result of a W projection.
     if projected_w is not None:
@@ -168,9 +169,28 @@ def generate_images(
                 PIL.Image.fromarray(create_image_grid(np.array(images)),
                                     'RGB').save(os.path.join(run_dir, 'grid.jpg'))
             # The user tells the specific shape of the grid, but one value may be None
-            elif None in (grid_width, grid_height):
+            else:
                 PIL.Image.fromarray(create_image_grid(np.array(images), (grid_width, grid_height)),
                                     'RGB').save(os.path.join(run_dir, 'grid.jpg'))
+
+    # Save the configuration used
+    ctx.obj = {
+        'network_pkl': network_pkl,
+        'training_snapshot': training_snapshot,
+        'snapshot_size': snapshot_size,
+        'seeds': seeds,
+        'truncation_psi': truncation_psi,
+        'class_idx': class_idx,
+        'noise_mode': noise_mode,
+        'save_grid': save_grid,
+        'grid_width': grid_width,
+        'grid_height': grid_height,
+        'run_dir': run_dir,
+        'description': description,
+        'projected_w': projected_w
+    }
+    # Save the run configuration
+    save_config(ctx=ctx, run_dir=run_dir)
 
 
 # ----------------------------------------------------------------------------
@@ -201,7 +221,7 @@ def _parse_slowdown(slowdown: Union[str, int]) -> int:
 @click.option('--fps', type=parse_fps, help='Video FPS.', default=30, show_default=True)
 @click.option('--compress', is_flag=True, help='Add flag to compress the final mp4 file with ffmpeg-python (same resolution, lower file size)')
 @click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
-@click.option('--desc', type=str, help='Description name for the directory path to save results', default='random-video', show_default=True)
+@click.option('--description', '-desc', type=str, help='Description name for the directory path to save results', default='', show_default=True)
 def random_interpolation_video(
         ctx: click.Context,
         network_pkl: Union[str, os.PathLike],
@@ -215,7 +235,7 @@ def random_interpolation_video(
         duration_sec: float,
         fps: int,
         outdir: Union[str, os.PathLike],
-        desc: str,
+        description: str,
         compress: bool,
         smoothing_sec: Optional[float] = 3.0  # for Gaussian blur; won't be a parameter, change at own risk
 ):
@@ -241,8 +261,9 @@ def random_interpolation_video(
         G = legacy.load_network_pkl(f)['G_ema'].to(device)  # type: ignore
 
     # Create the run dir with the given name description; add slowdown if different than the default (1)
-    desc = f'{desc}-{slowdown}xslowdown' if slowdown != 1 else desc
-    run_dir = make_run_dir(outdir, desc)
+    description = 'random-video' if len(description) == 0 else description
+    description = f'{description}-{slowdown}xslowdown' if slowdown != 1 else description
+    run_dir = make_run_dir(outdir, description)
 
     # Number of frames in the video and its total duration in seconds
     num_frames = int(np.rint(duration_sec * fps))
@@ -263,14 +284,14 @@ def random_interpolation_video(
         # Get the z latents
         all_latents = np.stack([np.random.RandomState(seed).randn(*shape).astype(np.float32) for seed in seeds], axis=1)
 
-    # If only one seed is provided, but the specific grid shape is specified:
+    # If only one seed is provided, but the user specifies the grid shape:
     elif None not in (grid_width, grid_height) and len(seeds) == 1:
         grid_size = (grid_width, grid_height)
         shape = [num_frames, np.prod(grid_size), G.z_dim]
         # Since we have one seed, we use it to generate all latents
         all_latents = np.random.RandomState(*seeds).randn(*shape).astype(np.float32)
 
-    # If more than one seed is provided, but the user also specifies the grid shape:
+    # If one or more seeds are provided, and the user also specifies the grid shape:
     elif None not in (grid_width, grid_height) and len(seeds) >= 1:
         # Case is similar to the first one
         num_seeds = len(seeds)
@@ -296,6 +317,26 @@ def random_interpolation_video(
     # Name of the video
     mp4_name = f'{grid_width}x{grid_height}-slerp-{slowdown}xslowdown'
 
+    # Save the configuration used
+    ctx.obj = {
+        'network_pkl': network_pkl,
+        'seeds': seeds,
+        'truncation_psi': truncation_psi,
+        'class_idx': class_idx,
+        'noise_mode': noise_mode,
+        'grid_width': grid_width,
+        'grid_height': grid_height,
+        'slowdown': slowdown,
+        'duration_sec': duration_sec,
+        'video_fps': fps,
+        'run_dir': run_dir,
+        'description': description,
+        'compress': compress,
+        'smoothing_sec': smoothing_sec
+    }
+    # Save the run configuration
+    save_config(ctx=ctx, run_dir=run_dir)
+
     # Labels.
     label = torch.zeros([1, G.c_dim], device=device)
     if G.c_dim != 0:
@@ -306,6 +347,7 @@ def random_interpolation_video(
         if class_idx is not None:
             print('warn: --class=lbl ignored when running on an unconditional network')
 
+    # Let's slowdown the video, if so desired
     while slowdown > 1:
         all_latents, duration_sec, num_frames = double_slowdown(latents=all_latents,
                                                                 duration=duration_sec,

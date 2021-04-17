@@ -10,11 +10,11 @@
 
 import os
 from collections import OrderedDict
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Tuple
 import click
 
 import dnnlib
-from torch_utils.gen_utils import parse_fps, compress_video, make_run_dir, w_to_img
+from torch_utils.gen_utils import parse_fps, compress_video, make_run_dir, w_to_img, num_range, save_config
 
 import numpy as np
 import PIL.Image
@@ -29,50 +29,75 @@ import moviepy.editor
 # ----------------------------------------------------------------------------
 
 
-def num_range(s: str) -> List[int]:
+def parse_styles(s: str) -> List[int]:
     """
-    Extended helper function from the original (original is contained here).
-    Accept a comma separated list of numbers 'a,b,c', a range 'a-c', or a combination
-    of both 'a,b-c', 'a-b,c', 'a,b-c,d,e-f,...', and return as a list of ints.
+    Helper function for parsing style layers. s will be a comma-separated list of values, and these can be
+    either ranges ('a-b'), ints ('a', 'b', 'c', ...), or the style layer names ('coarse', 'middle', 'fine').
 
-    Also accepted is the styles defined in the StyleGAN paper: 'coarse', 'middle', and
-    'fine' styles, if the user wishes to use some pre-determined ones.
+    A combination of these can also be used. For example, if the user wishes to mix the 'coarse' and 'fine'
+    layers, then the input can be: 'coarse,fine'. If just the 'middle' and '14-17' layers are to be used,
+    then 'middle,14-17' or '14-17,middle' can be the used as input.
+
+    The repeated styles will be deleted, as these won't add anything to our final result.
     """
-    # coarse, middle, and fine style layers as defined in the StyleGAN paper
-    if s == 'coarse':
-        return list(range(0, 4))
-    elif s == 'middle':
-        return list(range(4, 8))
-    elif s == 'fine':
-        return list(range(8, 18))
-    # Else, the user has defined specific styles (or seeds) to use
-    else:
-        str_list = s.split(',')
-        nums = []
-        for el in str_list:
-            if '-' in el:
-                # Get the lower and upper bounds of the range
-                a, b = el.split('-')
-                # Sanity check 0: only ints please
-                try:
-                    lower, upper = int(a), int(b)
-                except ValueError:
-                    print(f'One of the elements in "{s}" is not an int!')
-                    raise
-                # Sanity check 1: accept 'a-b' or 'b-a', with a<=b
-                if lower <= upper:
-                    r = [n for n in range(lower, upper + 1)]
-                else:
-                    r = [n for n in range(upper, lower + 1)]
-                # We will extend nums (r is also a list)
-                nums.extend(r)
+    style_layers_dict = {'coarse': list(range(0, 4)), 'middle': list(range(4, 8)), 'fine': list(range(8, 18))}
+    str_list = s.split(',')
+    nums = []
+    for el in str_list:
+        if el in style_layers_dict:
+            nums.extend(style_layers_dict[el])
+        elif '-' in el:
+            # Get the lower and upper bounds of the range
+            a, b = el.split('-')
+            # Sanity check 0: only ints please
+            try:
+                lower, upper = int(a), int(b)
+            except ValueError:
+                print(f'Error: One of the limits in "{el}" is not an int!')
+                raise
+            # Sanity check 1: accept either 'a-b' and 'b-a', with 'a<=b'
+            if lower <= upper:
+                r = [n for n in range(int(a), int(b) + 1)]
             else:
-                # It's a single number, so just append it
+                r = [n for n in range(int(b), int(a) + 1)]
+            nums.extend(r)
+        else:
+            # Sanity check 2: It's a number, so try to use it (has to be an int)
+            try:
                 nums.append(int(el))
-        # Sanity check 2: delete repeating numbers, but keep order given by user
-        nums = list(OrderedDict.fromkeys(nums))
-        return nums
+            except ValueError:
+                print(f'Error: "{el}" in "{s}" is not an int!')
+                raise
+    # Sanity check 3: delete repeating numbers
+    nums = list(set(nums))
+    return nums
 
+
+def style_names(max_style: int, file_name: str, desc: str, col_styles: List[int]) -> Tuple[str, str]:
+    """
+    Add to the name the styles (from the StyleGAN paper) if they are being
+    used to both the file name and the new directory to be created.
+    """
+    if list(range(0, 4)) == col_styles:
+        file_name = f'{file_name}-coarse_styles'
+        desc = f'{desc}-coarse_styles'
+    elif list(range(4, 8)) == col_styles:
+        file_name = f'{file_name}-middle_styles'
+        desc = f'{desc}-middle_styles'
+    elif list(range(8, max_style)) == col_styles:
+        file_name = f'{file_name}-fine_styles'
+        desc = f'{desc}-fine_styles'
+    elif list(range(0, 8)) == col_styles:
+        file_name = f'{file_name}-coarse+middle_styles'
+        desc = f'{desc}-coarse+middle_styles'
+    elif list(range(4, max_style)) == col_styles:
+        file_name = f'{file_name}-middle+fine_styles'
+        desc = f'{desc}-middle+fine_styles'
+    elif list(range(0, 4)) + list(range(8, max_style)) == col_styles:
+        file_name = f'{file_name}-coarse+fine_styles'
+        desc = f'{desc}-coarse+fine_styles'
+
+    return file_name, desc
 
 # ----------------------------------------------------------------------------
 
@@ -87,15 +112,17 @@ def main():
 
 
 @main.command(name='grid')
+@click.pass_context
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--row-seeds', '-rows', 'row_seeds', type=num_range, help='Random seeds to use for image rows', required=True)
 @click.option('--col-seeds', '-cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
-@click.option('--styles', 'col_styles', type=num_range, help='Style layers to use; can pass "coarse", "middle", "fine", or a list or range of ints', default='0-6', show_default=True)
+@click.option('--styles', 'col_styles', type=parse_styles, help='Style layers to use; can pass "coarse", "middle", "fine", or a list or range of ints', default='0-6', show_default=True)
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
-@click.option('--desc', type=str, help='Description name for the directory path to save results', default='stylemix-grid', show_default=True)
+@click.option('--description', '-desc', type=str, help='Description name for the directory path to save results', default='', show_default=True)
 def generate_style_mix(
+        ctx: click.Context,
         network_pkl: str,
         row_seeds: List[int],
         col_seeds: List[int],
@@ -103,7 +130,7 @@ def generate_style_mix(
         truncation_psi: float,
         noise_mode: str,
         outdir: str,
-        desc: str
+        description: str
 ):
     """Generate style-mixing images using pretrained network pickle.
 
@@ -113,21 +140,19 @@ def generate_style_mix(
     python style_mixing.py grid --rows=85,100,75,458,1500 --cols=55,821,1789,293 \\
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
+    # TODO: add class_idx
     print(f'Loading networks from "{network_pkl}"...')
     device = torch.device('cuda')
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device)  # type: ignore
 
     # Sanity check: loaded model and selected styles must be compatible
-    max_style = 2 * int(np.log2(G.img_resolution)) - 3
+    max_style = G.mapping.num_ws
     if max(col_styles) > max_style:
-        click.secho(f'WARNING: Maximum col-style allowed: {max_style} for loaded network "{network_pkl}" '
+        click.secho(f'WARNING: Maximum col-style allowed: {max_style - 1} for loaded network "{network_pkl}" '
                     f'of resolution {G.img_resolution}x{G.img_resolution}', fg='red')
         click.secho('Removing col-styles exceeding this value...', fg='blue')
-        col_styles[:] = [style for style in col_styles if style <= max_style]
-
-    # Create the run dir with the given name description
-    run_dir = make_run_dir(outdir, desc)
+        col_styles[:] = [style for style in col_styles if style < max_style]
 
     print('Generating W vectors...')
     all_seeds = list(set(row_seeds + col_seeds))
@@ -149,9 +174,13 @@ def generate_style_mix(
             image = w_to_img(G, w, noise_mode)[0]
             image_dict[(row_seed, col_seed)] = image
 
-    print('Saving images...')
-    for (row_seed, col_seed), image in image_dict.items():
-        PIL.Image.fromarray(image, 'RGB').save(f'{run_dir}/{row_seed}-{col_seed}.jpg')
+    # Name of grid and run directory
+    grid_name = 'grid'
+    description = 'stylemix-grid' if len(description) == 0 else description
+    # Add to the name the styles (from the StyleGAN paper) if they are being used
+    grid_name, description = style_names(max_style, grid_name, description, col_styles)
+    # Create the run dir with the given name description
+    run_dir = make_run_dir(outdir, description)
 
     print('Saving image grid...')
     W = G.img_resolution
@@ -167,7 +196,25 @@ def generate_style_mix(
             if col_idx == 0:
                 key = (row_seed, row_seed)
             canvas.paste(PIL.Image.fromarray(image_dict[key], 'RGB'), (W * col_idx, H * row_idx))
-    canvas.save(os.path.join(run_dir, 'grid.jpg'))
+    canvas.save(os.path.join(run_dir, f'{grid_name}.jpg'))
+
+    print('Saving individual images...')
+    for (row_seed, col_seed), image in image_dict.items():
+        PIL.Image.fromarray(image, 'RGB').save(os.path.join(run_dir, f'{row_seed}-{col_seed}.jpg'))
+
+    # Save the configuration used
+    ctx.obj = {
+        'network_pkl': network_pkl,
+        'row_seeds': row_seeds,
+        'col_seeds': col_seeds,
+        'col_styles': col_styles,
+        'truncation_psi': truncation_psi,
+        'noise_mode': noise_mode,
+        'run_dir': run_dir,
+        'description': description,
+    }
+    # Save the run configuration
+    save_config(ctx=ctx, run_dir=run_dir)
 
 
 # ----------------------------------------------------------------------------
@@ -178,7 +225,7 @@ def generate_style_mix(
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--row-seed', '-row', 'row_seed', type=int, help='Random seed to use for video row', required=True)
 @click.option('--col-seeds', '-cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
-@click.option('--styles', 'col_styles', type=num_range, help='Style layers to use; can pass "coarse", "middle", "fine", or a list or range of ints', default='0-6', show_default=True)
+@click.option('--styles', 'col_styles', type=parse_styles, help='Style layers to use; can pass "coarse", "middle", "fine", or a list or range of ints', default='0-6', show_default=True)
 @click.option('--only-stylemix', is_flag=True, help='Add flag to only show the style-mixed images in the video')
 @click.option('--compress', is_flag=True, help='Add flag to compress the final mp4 file via ffmpeg-python (same resolution, lower file size)')
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
@@ -186,7 +233,7 @@ def generate_style_mix(
 @click.option('--duration-sec', type=float, help='Duration of the video in seconds', default=30, show_default=True)
 @click.option('--fps', type=parse_fps, help='Video FPS.', default=30, show_default=True)
 @click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
-@click.option('--desc', type=str, help='Description name for the directory path to save results', default='stylemix-video', show_default=True)
+@click.option('--description', '-desc', type=str, help='Description name for the directory path to save results', default='', show_default=True)
 def random_stylemix_video(
         ctx: click.Context,
         network_pkl: str,
@@ -200,7 +247,7 @@ def random_stylemix_video(
         fps: int,
         duration_sec: float,
         outdir: Union[str, os.PathLike],
-        desc: str,
+        description: str,
         smoothing_sec: Optional[float] = 3.0  # for Gaussian blur; won't be a parameter, change at own risk
 ):
     """Generate random style-mixing video using pretrained network pickle.
@@ -212,9 +259,10 @@ def random_stylemix_video(
             --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
 
         \b
-        python style_mixing.py video --row=0 --cols=7-10 --styles=fine --duration-sec=60 \\
+        python style_mixing.py video --row=0 --cols=7-10 --styles=fine,1,3,5-7 --duration-sec=60 \\
             --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
+    # TODO: add class_idx
     # Calculate number of frames
     num_frames = int(np.rint(duration_sec * fps))
     print(f'Loading networks from "{network_pkl}"...')
@@ -226,15 +274,12 @@ def random_stylemix_video(
     w_avg = G.mapping.w_avg
 
     # Sanity check: loaded model and selected styles must be compatible
-    max_style = 2 * int(np.log2(G.img_resolution)) - 3
+    max_style = G.mapping.num_ws
     if max(col_styles) > max_style:
-        click.secho(f'WARNING: Maximum col-style allowed: {max_style} for loaded network "{network_pkl}" '
+        click.secho(f'WARNING: Maximum col-style allowed: {max_style - 1} for loaded network "{network_pkl}" '
                     f'of resolution {G.img_resolution}x{G.img_resolution}', fg='red')
         click.secho('Removing col-styles exceeding this value...', fg='blue')
-        col_styles[:] = [style for style in col_styles if style <= max_style]
-
-    # Create the run dir with the given name description
-    run_dir = make_run_dir(outdir, desc)
+        col_styles[:] = [style for style in col_styles if style < max_style]
 
     # First column (video) latents
     print('Generating source W vectors...')
@@ -258,19 +303,18 @@ def random_stylemix_video(
 
     # Video name
     mp4_name = f'{len(col_seeds)}x1'
-    # Add to the name the styles (from the StyleGAN paper) if they are being used
-    if list(range(0, 4)) == col_styles:
-        mp4_name = f'{mp4_name}-coarse_styles'
-    elif list(range(4, 8)) == col_styles:
-        mp4_name = f'{mp4_name}-middle_styles'
-    elif list(range(8, max_style + 1)) == col_styles:
-        mp4_name = f'{mp4_name}-fine_styles'
+    # Run dir name
+    description = 'stylemix-video' if len(description) == 0 else description
+    # Add to the name the styles (from the StyleGAN paper) if they are being used to both file and run dir
+    mp4_name, description = style_names(max_style, mp4_name, description, col_styles)
+    # Create the run dir with the description
+    run_dir = make_run_dir(outdir, description)
 
     # If user wishes to only show the style-transferred images (nice for 1x1 case)
     if only_stylemix:
         print('Generating style-mixing video (with only the style-transferred images)...')
         # We generate a canvas where we will paste all the generated images
-        canvas = PIL.Image.new('RGB', (W * len(col_seeds), H * len([row_seed])), 'black')
+        canvas = PIL.Image.new('RGB', (W * len(col_seeds), H * len([row_seed])), 'black')  # use any color you want
 
         def make_frame(t):
             # Get the frame number according to time t
@@ -336,6 +380,24 @@ def random_stylemix_video(
     # Compress the video (lower file size, same resolution)
     if compress:
         compress_video(original_video=final_video, original_video_name=mp4_name, outdir=run_dir, ctx=ctx)
+
+    # Save the configuration used
+    ctx.obj = {
+        'network_pkl': network_pkl,
+        'row_seed': row_seed,
+        'col_seeds': col_seeds,
+        'col_styles': col_styles,
+        'only_stylemix': only_stylemix,
+        'compress': compress,
+        'truncation_psi': truncation_psi,
+        'noise_mode': noise_mode,
+        'duration_sec': duration_sec,
+        'video_fps': fps,
+        'run_dir': run_dir,
+        'description': description,
+    }
+    # Save the run configuration
+    save_config(ctx=ctx, run_dir=run_dir)
 
 
 # ----------------------------------------------------------------------------

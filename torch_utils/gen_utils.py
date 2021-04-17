@@ -29,11 +29,11 @@ def create_image_grid(images: np.ndarray, grid_size: Optional[Tuple[int, int]] =
     # If user specifies the grid shape, use it
     if grid_size is not None:
         grid_w, grid_h = tuple(grid_size)
-        # If one of the sides is None, then we must infer it
+        # If one of the sides is None, then we must infer it (this was divine inspiration)
         if grid_w is None:
-            grid_w = num // grid_h + 1
+            grid_w = num // grid_h + min(num % grid_h, 1)
         elif grid_h is None:
-            grid_h = num // grid_w + 1
+            grid_h = num // grid_w + min(num % grid_w, 1)
 
     # Otherwise, we can infer it by the number of images (priority is given to grid_w)
     else:
