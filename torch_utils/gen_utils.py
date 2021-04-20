@@ -59,7 +59,12 @@ def parse_fps(fps: Union[str, int]) -> int:
     """Return FPS for the video; at worst, video will be 1 FPS, but no lower."""
     if isinstance(fps, int):
         return max(fps, 1)
-    return max(int(atof(fps)), 1)
+    try:
+        fps = int(atof(fps))
+        return max(fps, 1)
+    except ValueError:
+        print(f'Typo in "--fps={fps}", will use default value of 30')
+        return 30
 
 
 def num_range(s: str) -> List[int]:
@@ -70,33 +75,42 @@ def num_range(s: str) -> List[int]:
     """
     str_list = s.split(',')
     nums = []
+    range_re = re.compile(r'^(\d+)-(\d+)$')
     for el in str_list:
-        if '-' in el:
-            # Get the lower and upper bounds of the range
-            a, b = el.split('-')
-            # Sanity check 0: only ints please
-            try:
-                lower, upper = int(a), int(b)
-            except ValueError:
-                print(f'Upper and lower bounds of "{el}" in "{s}" should be ints!')
-                raise
+        match = range_re.match(el)
+        if match:
             # Sanity check 1: accept ranges 'a-b' or 'b-a', with a<=b
+            lower, upper = int(match.group(1)), int(match.group(2))
             if lower <= upper:
-                r = [n for n in range(lower, upper + 1)]
+                r = list(range(lower, upper + 1))
             else:
-                r = [n for n in range(upper, lower + 1)]
+                r = list(range(upper, lower + 1))
             # We will extend nums as r is also a list
             nums.extend(r)
         else:
             # It's a single number, so just append it (if it's an int)
             try:
-                nums.append(int(el))
+                nums.append(int(atof(el)))
             except ValueError:
-                print(f'"{el}" in "{s}" is not an int!')
-                raise
+                continue  # we ignore bad values
     # Sanity check 2: delete repeating numbers, but keep order given by user
     nums = list(OrderedDict.fromkeys(nums))
     return nums
+
+
+def parse_slowdown(slowdown: Union[str, int]) -> int:
+    """Function to parse the 'slowdown' parameter by the user. Will approximate to the nearest power of 2."""
+    # TODO: slowdown should be any int
+    if not isinstance(slowdown, int):
+        try:
+            slowdown = atof(slowdown)
+        except ValueError:
+            print(f'Typo in "{slowdown}"; will use default value of 1')
+            slowdown = 1
+    assert slowdown > 0, '"slowdown" cannot be negative!'
+    # Let's approximate slowdown to the closest power of 2 (nothing happens if it's already a power of 2)
+    slowdown = 2**int(np.rint(np.log2(slowdown)))
+    return max(slowdown, 1)  # Guard against 0.5, 0.25, ... cases
 
 
 # ----------------------------------------------------------------------------
@@ -242,20 +256,31 @@ def double_slowdown(latents: np.ndarray, duration: float, frames: int) -> Tuple[
 
 
 def z_to_img(G, latents: torch.Tensor, label: torch.Tensor, truncation_psi: float, noise_mode: str = 'const'):
-    """Get an image/np.ndarray from a latent Z using G, the label, truncation_psi, and noise_mode"""
+    """
+    Get an image/np.ndarray from a latent Z using G, the label, truncation_psi, and noise_mode. The shape
+    of the output image/np.ndarray will be [len(dlatents), G.img_resolution, G.img_resolution, G.img_channels]
+    """
+    assert isinstance(latents, torch.Tensor), f'latents should be a torch.Tensor!: "{type(latents)}"'
+    if len(latents.shape) == 1:
+        latents = latents.unsqueeze(0)  # An individual latent => [1, G.z_dim]
     img = G(z=latents, c=label, truncation_psi=truncation_psi, noise_mode=noise_mode)
-    img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
-    return img  # use img[0] for a single image
+    img = (img + 1) * 255 / 2  # [-1.0, 1.0] -> [0.0, 255.0]
+    img = img.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).cpu().numpy()  # NCWH => NWHC
+    return img
 
 
 def w_to_img(G, dlatents: torch.Tensor, noise_mode: str = 'const') -> np.ndarray:
-    """Get an image/np.ndarray from a dlatent W using G and the selected noise_mode"""
+    """
+    Get an image/np.ndarray from a dlatent W using G and the selected noise_mode. The final shape of the
+    returned image will be [len(dlatents), G.img_resolution, G.img_resolution, G.img_channels].
+    """
+    assert isinstance(dlatents, torch.Tensor), f'dlatents should be a torch.Tensor!: "{type(dlatents)}"'
     if len(dlatents.shape) == 2:
-        dlatents = dlatents.unsqueeze(0)
+        dlatents = dlatents.unsqueeze(0)  # An individual dlatent => [1, G.mapping.num_ws, G.mapping.w_dim]
     synth_image = G.synthesis(dlatents, noise_mode=noise_mode)
-    synth_image = (synth_image + 1) * (255/2)
-    synth_image = synth_image.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).cpu().numpy()
-    return synth_image  # use synth_image[0] for a single image
+    synth_image = (synth_image + 1) * 255/2  # [-1.0, 1.0] -> [0.0, 255.0]
+    synth_image = synth_image.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8).cpu().numpy()  # NCWH => NWHC
+    return synth_image
 
 
 def get_w_from_file(file: Union[str, os.PathLike], return_ext: bool = False) -> Tuple[np.ndarray, Optional[str]]:

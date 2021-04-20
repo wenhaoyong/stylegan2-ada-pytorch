@@ -46,30 +46,10 @@ def parse_styles(s: str) -> List[int]:
     for el in str_list:
         if el in style_layers_dict:
             nums.extend(style_layers_dict[el])
-        elif '-' in el:
-            # Get the lower and upper bounds of the range
-            a, b = el.split('-')
-            # Sanity check 0: only ints please
-            try:
-                lower, upper = int(a), int(b)
-            except ValueError:
-                print(f'Error: One of the limits in "{el}" is not an int!')
-                raise
-            # Sanity check 1: accept either 'a-b' and 'b-a', with 'a<=b'
-            if lower <= upper:
-                r = [n for n in range(int(a), int(b) + 1)]
-            else:
-                r = [n for n in range(int(b), int(a) + 1)]
-            nums.extend(r)
         else:
-            # Sanity check 2: It's a number, so try to use it (has to be an int)
-            try:
-                nums.append(int(el))
-            except ValueError:
-                print(f'Error: "{el}" in "{s}" is not an int!')
-                raise
-    # Sanity check 3: delete repeating numbers
-    nums = list(set(nums))
+            nums.extend(num_range(el))
+    # Sanity check: delete repeating numbers and limit values between 0 and 17
+    nums = list(set([max(min(x, 17), 0) for x in nums]))
     return nums
 
 
