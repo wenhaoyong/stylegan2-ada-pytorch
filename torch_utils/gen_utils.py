@@ -67,7 +67,7 @@ def parse_fps(fps: Union[str, int]) -> int:
         return 30
 
 
-def num_range(s: str) -> List[int]:
+def num_range(s: str, remove_repeated: bool = True) -> List[int]:
     """
     Extended helper function from the original (original is contained here).
     Accept a comma separated list of numbers 'a,b,c', a range 'a-c', or a combination
@@ -93,8 +93,9 @@ def num_range(s: str) -> List[int]:
                 nums.append(int(atof(el)))
             except ValueError:
                 continue  # we ignore bad values
-    # Sanity check 2: delete repeating numbers, but keep order given by user
-    nums = list(OrderedDict.fromkeys(nums))
+    # Sanity check 2: delete repeating numbers by default, but keep order given by user
+    if remove_repeated:
+        nums = list(OrderedDict.fromkeys(nums))
     return nums
 
 

@@ -19,6 +19,11 @@ This README will eventually be updated to correctly show how to run the followin
 the projection video as different `.jpg` files, as well as the projected disentangled latent vector at each step. These 
   will be saved in the `.npy` format in the run dir.
 
+**Note**: There's an option to `--compress` the generated videos using 
+[`ffmpeg-python`](https://github.com/kkroening/ffmpeg-python). Remember to install it via `pip3 install ffmpeg-python`
+before running any of the previous scripts, otherwise this last part of compressing the video will fail (but you will 
+still have the video).
+
 ***TODO:***
 
 * [ ] Update this README for a better user experience

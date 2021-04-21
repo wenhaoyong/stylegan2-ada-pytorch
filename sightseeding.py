@@ -8,7 +8,8 @@ import legacy
 import torch
 
 import numpy as np
-from torch_utils.gen_utils import parse_fps, compress_video, make_run_dir, w_to_img, create_image_grid, interpolate
+from torch_utils.gen_utils import parse_fps, compress_video, make_run_dir, w_to_img, create_image_grid, interpolate, \
+    num_range
 
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 import moviepy.editor
@@ -27,32 +28,7 @@ def _parse_seeds(s: str) -> List[int]:
     The returned list will be the numbers in this range, in order as the user entered
     them, without deleting repeated values.
     """
-    str_list = s.split(',')
-    nums = []
-    for el in str_list:
-        if '-' in el:
-            # Get the lower and upper bound of the range
-            a, b = el.split('-')
-            # Sanity check 0: only ints please
-            try:
-                lower, upper = int(a), int(b)
-            except ValueError:
-                print(f'Upper and lower bounds of "{el}" in "{s}" should be ints!')
-                raise
-            # Sanity check 1: accept ranges 'a-b' or 'b-a', with a<=b
-            if lower <= upper:
-                r = [n for n in range(lower, upper + 1)]
-            else:
-                r = [n for n in range(upper, lower + 1)]
-            # Extend nums as r is also a list
-            nums.extend(r)
-        else:
-            # It's a single number, so append it (if it's an int)
-            try:
-                nums.append(int(el))
-            except ValueError:
-                print(f'"{el}" in "{s}" is not an int!')
-                raise
+    nums = num_range(s, False)
     return nums
 
 
