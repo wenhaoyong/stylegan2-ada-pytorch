@@ -34,6 +34,7 @@ def setup_training_loop_kwargs(
     # General options (not included in desc).
     gpus       = None, # Number of GPUs: <int>, default = 1 gpu
     snap       = None, # Snapshot interval: <int>, default = 50 ticks
+    snap_res   = None,  # Snapshot size (1080p/4k/8k)
     metrics    = None, # List of metric names: [], ['fid50k_full'] (default), ...
     seed       = None, # Random seed: <int>, default = 0
 
@@ -85,8 +86,10 @@ def setup_training_loop_kwargs(
     assert isinstance(snap, int)
     if snap < 1:
         raise UserError('--snap must be at least 1')
-    args.image_snapshot_ticks = snap
+    args.image_snapshot_ticks = 1  # I prefer to see how it evolves vs. find out only when the model saves
     args.network_snapshot_ticks = snap
+
+    args.snap_res = '8k' if snap_res is None else snap_res
 
     if metrics is None:
         metrics = ['fid50k_full']
@@ -164,6 +167,7 @@ def setup_training_loop_kwargs(
         'paper512':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=1,   lrate=0.0025, gamma=0.5,  ema=20,  ramp=None, map=8),
         'paper1024': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,  gamma=2,    ema=10,  ramp=None, map=8),
         'cifar':     dict(ref_gpus=2,  kimg=100000, mb=64, mbstd=32, fmaps=1,   lrate=0.0025, gamma=0.01, ema=500, ramp=0.05, map=2),
+        '24gb-2gpu': dict(ref_gpus=2,  kimg=25000,  mb=16, mbstd=8,  fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=8),  # Made for 1024x1024 dataset; taken from @dvschultz
     }
 
     assert cfg in cfg_specs
@@ -421,6 +425,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--outdir', help='Where to save the results', type=click.Path(file_okay=False), default=os.path.join(os.getcwd(), 'training-runs'), show_default=True, metavar='DIR')
 @click.option('--gpus', help='Number of GPUs to use', type=click.IntRange(min=1, max=8), default=1, show_default=True, metavar='INT')
 @click.option('--snap', help='Snapshot interval in ticks', type=int, default=50, show_default=True, metavar='INT')
+@click.option('--snap-res', help='Image snapshot resolution', type=click.Choice(['1080p', '4k', '8k']), default='8k', show_default=True)
 @click.option('--metrics', help='Comma-separated list of metrics or "none" [default: fid50k_full]', type=CommaSeparatedList(), )
 @click.option('--seed', help='Random seed [default: 0]', type=int, metavar='INT')
 @click.option('-n', '--dry-run', help='Print training options and exit', is_flag=True)
