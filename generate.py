@@ -133,20 +133,25 @@ def generate_images(
     if training_snapshot:
         print('Recreating the snapshot grid...')
         size_dict = {'1080p': (1920, 1080, 3, 2), '4k': (3840, 2160, 7, 4), '8k': (7680, 4320, 7, 4)}
-        grid_width = np.clip(size_dict[snapshot_size][0] // G.img_resolution, size_dict[snapshot_size][2], 32)
-        grid_height = np.clip(size_dict[snapshot_size][1] // G.img_resolution, size_dict[snapshot_size][3], 32)
+        grid_width = int(np.clip(size_dict[snapshot_size][0] // G.img_resolution, size_dict[snapshot_size][2], 32))
+        grid_height = int(np.clip(size_dict[snapshot_size][1] // G.img_resolution, size_dict[snapshot_size][3], 32))
         num_images = grid_width * grid_height
 
-        grid_z = np.random.RandomState(0).randn(num_images, G.z_dim)
+        rnd = np.random.RandomState(0)
+        all_indices = list(range(15654))  # irrelevant
+        rnd.shuffle(all_indices)
+
+        grid_z = rnd.randn(num_images, G.z_dim)  # TODO: generate with torch, as in the training_loop.py file
         grid_img = z_to_img(G, torch.from_numpy(grid_z).to(device), label, truncation_psi, noise_mode)
         PIL.Image.fromarray(create_image_grid(grid_img, (grid_width, grid_height)),
                             'RGB').save(os.path.join(run_dir, 'fakes.jpg'))
         print('Saving individual images...')
         for idx, z in enumerate(grid_z):
             z = torch.from_numpy(z).unsqueeze(0).to(device)
+            w = G.mapping(z, None)  # to save the dlatent in .npy format
             img = z_to_img(G, z, label, truncation_psi, noise_mode)[0]
             PIL.Image.fromarray(img, 'RGB').save(os.path.join(run_dir, f'img{idx:04d}.jpg'))
-            np.save()
+            np.save(os.path.join(run_dir, f'img{idx:04d}.npy'), w.unsqueeze(0).cpu().numpy())
     else:
         if seeds is None:
             ctx.fail('--seeds option is required when not using --projected-w')
