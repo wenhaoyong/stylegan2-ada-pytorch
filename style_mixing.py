@@ -200,6 +200,11 @@ def generate_style_mix(
 # ----------------------------------------------------------------------------
 
 
+def _parse_cols(s: str):
+    """s can be a path to a npy/npz file or a seed number (int); TODO"""
+    pass
+
+
 @main.command(name='video')
 @click.pass_context
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)

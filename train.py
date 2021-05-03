@@ -11,7 +11,6 @@
 
 import os
 import click
-import re
 import json
 import tempfile
 import torch
@@ -50,6 +49,7 @@ def setup_training_loop_kwargs(
     gamma      = None, # Override R1 gamma: <float>
     kimg       = None, # Override training duration: <int>
     batch      = None, # Override batch size: <int>
+    lrate      = None, # Override the learning rate <float>
 
     # Discriminator augmentation.
     aug        = None, # Augmentation mode: 'ada' (default), 'noaug', 'fixed'
@@ -194,6 +194,9 @@ def setup_training_loop_kwargs(
     args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 4 # enable mixed-precision training
     args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
     args.D_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
+
+    if lrate is not None:
+        spec.lrate = lrate
 
     args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
@@ -391,7 +394,9 @@ def setup_training_loop_kwargs(
 
     return desc, args
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 def subprocess_fn(rank, args, temp_dir):
     dnnlib.util.Logger(file_name=os.path.join(args.run_dir, 'log.txt'), file_mode='a', should_flush=True)
@@ -415,7 +420,9 @@ def subprocess_fn(rank, args, temp_dir):
     # Execute training loop.
     training_loop.training_loop(rank=rank, **args)
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 class CommaSeparatedList(click.ParamType):
     name = 'list'
@@ -426,7 +433,9 @@ class CommaSeparatedList(click.ParamType):
             return []
         return value.split(',')
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 @click.command()
 @click.pass_context
@@ -452,6 +461,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--gamma', help='Override R1 gamma', type=float)
 @click.option('--kimg', help='Override training duration', type=int, metavar='INT')
 @click.option('--batch', help='Override batch size', type=int, metavar='INT')
+@click.option('--lrate', help='Override the learning rate', type=float)
 
 # Discriminator augmentation.
 @click.option('--aug', help='Augmentation mode [default: ada]', type=click.Choice(['noaug', 'ada', 'fixed']))
@@ -570,5 +580,6 @@ def main(ctx, outdir, dry_run, **config_kwargs):
 
 if __name__ == "__main__":
     main()  # pylint: disable=no-value-for-parameter
+
 
 # ----------------------------------------------------------------------------
