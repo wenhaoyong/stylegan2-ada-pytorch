@@ -14,7 +14,8 @@ This README will eventually be updated to correctly show how to run the followin
   details.
 * **Vertical mirroring for training**: Use `--mirror-y=True` when training your model to mirror your training images along the horizontal axis.
 * [**Project in W+**](https://arxiv.org/abs/1904.03189): Use `--project-in-wplus` when running `projector.py` to project 
-  in the W+ latent space. Use `--help` for better guidance for now.
+  in the W+ latent space. Use `--help` for better guidance for now. Thanks to [Peter Baylies](https://github.com/pbaylies) 
+  on how to do this cleanly.
   * **Save all steps in the projection**: Running `projector.py` with `--save-every-step` will save all the frames of 
 the projection video as different `.jpg` files, as well as the projected disentangled latent vector at each step. These 
   will be saved in the `.npy` format in the run dir.

@@ -127,10 +127,10 @@ class VGG16FeaturesNVIDIA(torch.nn.Module):
         self.fc3 = vgg16.layers.fc3
         self.softmax = vgg16.layers.softmax
 
-    def forward(self, x: torch.Tensor, layers: List[str], normed: bool = True):
+    def get_layers_features(self, x: torch.Tensor, layers: List[str], normed: bool = False, sqrt_normed: bool = False):
         """
         x is an image/tensor of shape [1, 3, 256, 256], and layers is a list of the names of the layers you wish
-        to return in order to compare the activations with another image.
+        to return in order to compare the activations/features with another image.
 
         Example:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -177,7 +177,11 @@ class VGG16FeaturesNVIDIA(torch.nn.Module):
         result_list = list()
         for layer in layers:
             if normed:
+                # Divide each layer by the number of elements in it
                 result_list.append(eval(layer) / torch.numel(eval(layer)))
+            elif sqrt_normed:
+                # Divide each layer by the square root of the number of elements in it
+                result_list.append(eval(layer) / torch.tensor(torch.numel(eval(layer)), dtype=float).sqrt())
             else:
                 result_list.append(eval(layer))
         return result_list
@@ -196,12 +200,15 @@ def project(
         w_avg_samples: int = 10000,
         initial_learning_rate: float = 0.1,
         initial_noise_factor: float = 0.05,
+        constant_learning_rate: bool = False,
         lr_rampdown_length: float = 0.25,
         lr_rampup_length: float = 0.05,
         noise_ramp_length: float = 0.75,
         regularize_noise_weight: float = 1e5,
         project_in_wplus: bool = False,
-        loss_paper: str = 'sgan2',  # 'sgan2', 'im2sgan'  TODO: try one with gradients from CLIP
+        loss_paper: str = 'sgan2',  # ['sgan2' | 'im2sgan']  TODO: try one with gradients from CLIP
+        normed: bool = False,
+        sqrt_normed: bool = False,
         start_wavg: bool = True,
         device: torch.device) -> torch.Tensor:  # output shape: [num_steps, C, 512], C depending on resolution of G
     """
@@ -216,7 +223,7 @@ def project(
     # Compute w stats.
     z_samples = np.random.RandomState(123).randn(w_avg_samples, G.z_dim)
     w_samples = G.mapping(torch.from_numpy(z_samples).to(device), None)  # [N, L, C]
-    if project_in_wplus:
+    if project_in_wplus:  # Thanks to @pbaylies for a clean way on how to do this
         print('Projecting in W+ latent space...')
         if start_wavg:
             print(f'Starting from W midpoint using {w_avg_samples} samples...')
@@ -236,7 +243,7 @@ def project(
         else:
             print(f'Starting from a random vector (seed: {projection_seed})...')
             z = np.random.RandomState(projection_seed).randn(1, G.z_dim)
-            w_avg = G.mapping(torch.from_numpy(z).to(device), None)[:, :1, :]  # [1, 1, C]
+            w_avg = G.mapping(torch.from_numpy(z).to(device), None)[:, :1, :]  # [1, 1, C]; fake w_avg
             w_avg = G.mapping.w_avg + truncation_psi * (w_avg - G.mapping.w_avg)
         w_std = (torch.sum((w_samples - w_avg) ** 2) / w_avg_samples) ** 0.5
     # Setup noise inputs.
@@ -247,31 +254,27 @@ def project(
     if target_images.shape[2] > 256:
         target_images = F.interpolate(target_images, size=(256, 256), mode='area')
 
+    # Load the VGG16 feature detector.
+    url = 'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/vgg16.pt'
+    with dnnlib.util.open_url(url) as f:
+        vgg16 = torch.jit.load(f).eval().to(device)
+
     # Define the new losses
     if loss_paper == 'sgan2':
-        # Load VGG16 feature detector.
-        url = 'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/vgg16.pt'
-        with dnnlib.util.open_url(url) as f:
-            vgg16 = torch.jit.load(f).eval().to(device)
         target_features = vgg16(target_images, resize_images=False, return_lpips=True)
 
     elif loss_paper == 'im2sgan':
-        # initial_learning_rate = 0.5  # uncomment to use a higher initial learning rate (useful for projecting in FFHQ)
-        # Load the VGG16 feature detector
-        url = 'https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/vgg16.pt'
-        with dnnlib.util.open_url(url) as f:
-            vgg16 = torch.jit.load(f).eval().to(device)
-
-        vgg16_features = VGG16FeaturesNVIDIA(vgg16)
-        # This is too cumbersome to add as command-line input, so we leave it here; use whatever you need
+        # Use specific layers
+        vgg16 = VGG16FeaturesNVIDIA(vgg16)
+        # Too cumbersome to add as command-line arg, so we leave it here; use whatever you need, as many times as needed
         layers = ['conv1_1', 'conv1_2', 'conv2_1', 'conv2_2', 'conv3_1', 'conv3_2', 'conv3_3', 'conv4_1', 'conv4_2',
                   'conv4_3', 'conv5_1', 'conv5_2', 'conv5_3', 'fc1', 'fc2', 'fc3']
-        target_features = vgg16_features(target_images, layers)
+        target_features = vgg16.get_layers_features(target_images, layers, normed=normed, sqrt_normed=sqrt_normed)
         # Uncomment the next line if you also want to use LPIPS features
         # lpips_target_features = vgg16(target_images, resize_images=False, return_lpips=True)
 
         mse = torch.nn.MSELoss(reduction='mean')
-        ssim_loss = SSIM()  # can be used as a loss; recommended usage: ssim_out = 1 - ssim_loss(img1, img2)
+        ssim_out = SSIM()  # can be used as a loss; recommended usage: ssim_loss = 1 - ssim_out(img1, img2)
 
     w_opt = w_avg.clone().detach().requires_grad_(True)
     w_out = torch.zeros([num_steps] + list(w_opt.shape[1:]), dtype=torch.float32, device=device)
@@ -286,9 +289,14 @@ def project(
         # Learning rate schedule.
         t = step / num_steps
         w_noise_scale = w_std * initial_noise_factor * max(0.0, 1.0 - t / noise_ramp_length) ** 2
-        lr_ramp = min(1.0, (1.0 - t) / lr_rampdown_length)
-        lr_ramp = 0.5 - 0.5 * np.cos(lr_ramp * np.pi)
-        lr_ramp = lr_ramp * min(1.0, t / lr_rampup_length)
+
+        if constant_learning_rate:
+            # Turn off the rampup/rampdown of the learning rate
+            lr_ramp = 1.0
+        else:
+            lr_ramp = min(1.0, (1.0 - t) / lr_rampdown_length)
+            lr_ramp = 0.5 - 0.5 * np.cos(lr_ramp * np.pi)
+            lr_ramp = lr_ramp * min(1.0, t / lr_rampup_length)
         lr = initial_learning_rate * lr_ramp
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
@@ -333,17 +341,18 @@ def project(
             # Uncomment to also use LPIPS features as loss (must be better fine-tuned):
             # lpips_synth_features = vgg16(synth_images, resize_images=False, return_lpips=True)
 
-            synth_features = vgg16_features(synth_images, layers)
+            synth_features = vgg16.get_layers_features(synth_images, layers, normed=normed, sqrt_normed=sqrt_normed)
             percept_error = sum(map(lambda x, y: mse(x, y), target_features, synth_features))
 
-            # Uncomment to add the LPIPS loss to the perception error (to-be better fine-tuned)
+            # Also uncomment to add the LPIPS loss to the perception error (to-be better fine-tuned)
             # percept_error += 1e1 * (lpips_target_features - lpips_synth_features).square().sum()
 
             # Pixel-level MSE
             mse_error = mse(synth_images, target_images) / (G.img_channels * G.img_resolution * G.img_resolution)
-            ssim_out = ssim_loss(target_images, synth_images)  # tracking SSIM (can also be added as a loss if desired)
-            loss = percept_error + mse_error
-            # Noise regularization. TODO: try removing this regularization and see if it helps
+            ssim_loss = ssim_out(target_images, synth_images)  # tracking SSIM (can also be added the total loss)
+            loss = percept_error + mse_error  # + 1e-2 * (1 - ssim_loss)  # needs to be fine-tuned
+
+            # Noise regularization.
             reg_loss = 0.0
             for v in noise_buffs.values():
                 noise = v[None, None, :, :]  # must be [1,1,H,W] for F.avg_pool2d()
@@ -354,15 +363,15 @@ def project(
                         break
                     noise = F.avg_pool2d(noise, kernel_size=2)
             loss += reg_loss * regularize_noise_weight
-            # Print in the same line (avoid cluttering the commandline)
+            # We print in the same line (avoid cluttering the commandline)
             n_digits = int(np.log10(num_steps)) + 1 if num_steps > 0 else 1
             message = f'step {step + 1:{n_digits}d}/{num_steps}: percept loss {percept_error.item():.7e} | ' \
-                      f'pixel mse {mse_error.item():.7e} | ssim {ssim_out.item():.7e} | loss {loss.item():.7e}'
+                      f'pixel mse {mse_error.item():.7e} | ssim {ssim_loss.item():.7e} | loss {loss.item():.7e}'
             print(message, end='\r')
 
             last_status = {'percept_error': percept_error.item(),
                            'pixel_mse': mse_error.item(),
-                           'ssim': ssim_out.item(),
+                           'ssim': ssim_loss.item(),
                            'loss': loss.item()}
 
         # Step
@@ -385,6 +394,7 @@ def project(
         'w_avg_samples': w_avg_samples,
         'initial_learning_rate': initial_learning_rate,
         'initial_noise_factor': initial_noise_factor,
+        'constant_learning_rate': constant_learning_rate,
         'lr_rampdown_length': lr_rampdown_length,
         'lr_rampup_length': lr_rampup_length,
         'noise_ramp_length': noise_ramp_length,
@@ -409,46 +419,59 @@ def project(
 @click.command()
 @click.pass_context
 @click.option('--network', '-net', 'network_pkl', type=click.Path(exists=True, dir_okay=False), help='Network pickle filename', required=True)
-@click.option('--description', '-desc', type=str, help='Extra description to add to the experiment name', default='')
 @click.option('--target', '-t', 'target_fname', type=click.Path(exists=True, dir_okay=False), help='Target image file to project to', required=True, metavar='FILE')
+# Optimization options
 @click.option('--num-steps', '-nsteps', help='Number of optimization steps', type=click.IntRange(min=0), default=1000, show_default=True)
+@click.option('--init-lr', '-lr', 'initial_learning_rate', type=float, help='Initial learning rate of the optimization process', default=0.1, show_default=True)
+@click.option('--constant-lr', 'constant_learning_rate', is_flag=True, help='Add flag to use a constant learning rate throughout the optimization (turn off the rampup/rampdown)')
+@click.option('--reg-noise-weight', '-regw', 'regularize_noise_weight', type=float, help='Noise weight regularization', default=1e5, show_default=True)
 @click.option('--seed', type=int, help='Random seed', default=303, show_default=True)
+# Video options
 @click.option('--save-video', '-video', is_flag=True, help='Save an mp4 video of optimization progress')
 @click.option('--compress', is_flag=True, help='Compress video with ffmpeg-python; same resolution, lower memory size')
 @click.option('--fps', type=int, help='FPS for the mp4 video of optimization progress (if saved)', default=30, show_default=True)
+# Options on which space to project to (W or W+) and where to start: the middle point of W (w_avg) or a specific seed
 @click.option('--project-in-wplus', '-wplus', is_flag=True, help='Project in the W+ latent space')
 @click.option('--start-wavg', '-wavg', type=bool, help='Start with the average W vector, ootherwise will start from a random seed (provided by user)', default=True, show_default=True)
 @click.option('--projection-seed', type=int, help='Seed to start projection from', default=None, show_default=True)
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi to use in projection when using a projection seed', default=0.7, show_default=True)
+# Decide the loss to use when projecting (you must select the VGG16 features/layers to use in the im2sgan loss)
 @click.option('--loss-paper', '-loss', type=click.Choice(['sgan2', 'im2sgan']), help='Loss to use', default='sgan2', show_default=True)
+@click.option('--vgg-normed', 'normed', is_flag=True, help='Add flag to norm the VGG16 features by the number of elements per layer')
+@click.option('--vgg-sqrt-normed', 'sqrt_normed', is_flag=True, help='Add flag to norm the VGG16 features by the square root of the number of elements per layer')
 @click.option('--save-every-step', '-saveall', is_flag=True, help='Save every step taken in the projection (npy and image).')
-@click.option('--save-run-config', is_flag=True, help='Save run configuration (params, hyperparams, python file) for easier debugging and tracking of runs')
+# Extra parameters for saving the results
 @click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
+@click.option('--description', '-desc', type=str, help='Extra description to add to the experiment name', default='')
 def run_projection(
         ctx: click.Context,
         network_pkl: str,
-        description: str,
         target_fname: str,
-        outdir: str,
-        save_run_config: bool,
+        num_steps: int,
+        initial_learning_rate: float,
+        constant_learning_rate: bool,
+        regularize_noise_weight: float,
+        seed: int,
         save_video: bool,
         compress: bool,
-        seed: int,
-        projection_seed: int,
-        truncation_psi: float,
-        num_steps: int,
         fps: int,
         project_in_wplus: bool,
         start_wavg: bool,
+        projection_seed: int,
+        truncation_psi: float,
         loss_paper: str,
-        save_every_step: bool
+        normed: bool,
+        sqrt_normed: bool,
+        save_every_step: bool,
+        outdir: str,
+        description: str,
 ):
     """Project given image to the latent space of pretrained network pickle.
 
     Examples:
 
     \b
-    python projector.py --target=~/mytargetimg.png --project-in-wplus --save-video --num-steps=1000 --save-every-step \\
+    python projector.py --target=~/mytarget.png --project-in-wplus --save-video --num-steps=1000 --save-every-step \\
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/ffhq.pkl
     """
     np.random.seed(seed)
@@ -479,11 +502,16 @@ def run_projection(
         G,
         target=torch.tensor(target_uint8.transpose([2, 0, 1]), device=device),
         num_steps=num_steps,
+        initial_learning_rate=initial_learning_rate,
+        constant_learning_rate=constant_learning_rate,
+        regularize_noise_weight=regularize_noise_weight,
         project_in_wplus=project_in_wplus,
         start_wavg=start_wavg,
         projection_seed=projection_seed,
         truncation_psi=truncation_psi,
         loss_paper=loss_paper,
+        normed=normed,
+        sqrt_normed=sqrt_normed,
         device=device
     )
     elapsed_time = format_time(perf_counter()-start_time)
@@ -509,9 +537,8 @@ def run_projection(
         'run_config': run_config
     }
     # Save the run configuration
-    if save_run_config:
-        save_config(ctx=ctx, run_dir=run_dir)
-        copy_files_and_create_dirs(files=[(__file__, run_dir)])
+    save_config(ctx=ctx, run_dir=run_dir)
+    copy_files_and_create_dirs(files=[(__file__, run_dir)])
 
     # Render debug output: optional video and projected image and W vector.
     result_name = os.path.join(run_dir, 'proj')
@@ -523,7 +550,7 @@ def run_projection(
     if start_wavg:
         result_name, npy_name = f'{result_name}_wavg', f'{npy_name}_wavg'
     else:
-        result_name, npy_name = f'{result_name}_{projection_seed}', f'{npy_name}_{projection_seed}'
+        result_name, npy_name = f'{result_name}_seed-{projection_seed}', f'{npy_name}_seed-{projection_seed}'
 
     # Save the target image
     target_pil.save(os.path.join(run_dir, 'target.jpg'))

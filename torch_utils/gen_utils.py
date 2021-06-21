@@ -284,6 +284,16 @@ def w_to_img(G, dlatents: torch.Tensor, noise_mode: str = 'const') -> np.ndarray
     return synth_image
 
 
+def get_w_from_seed(G, device: torch.device, seed: int, truncation_psi: float) -> torch.Tensor:
+    """Get the dlatent from a random seed, using the truncation trick (this could be optional)"""
+    z = np.random.RandomState(seed).randn(1, G.z_dim)
+    w = G.mapping(torch.from_numpy(z).to(device), None)
+    w_avg = G.mapping.w_avg
+    w = w_avg + (w - w_avg) * truncation_psi
+
+    return w
+
+
 def get_w_from_file(file: Union[str, os.PathLike], return_ext: bool = False) -> Tuple[np.ndarray, Optional[str]]:
     """Get dlatent (w) from a .npy or .npz file"""
     filename, file_extension = os.path.splitext(file)

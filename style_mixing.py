@@ -14,7 +14,8 @@ from typing import List, Union, Optional, Tuple
 import click
 
 import dnnlib
-from torch_utils.gen_utils import parse_fps, compress_video, make_run_dir, w_to_img, num_range, save_config
+from torch_utils.gen_utils import parse_fps, compress_video, make_run_dir, w_to_img, num_range, \
+    save_config, get_w_from_file, get_w_from_seed
 
 import numpy as np
 import PIL.Image
@@ -79,6 +80,23 @@ def style_names(max_style: int, file_name: str, desc: str, col_styles: List[int]
 
     return file_name, desc
 
+
+def _parse_cols(s: str, G, device: torch.device, truncation_psi: float) -> List[torch.Tensor]:
+    """s can be a path to a npy/npz file or a seed number (int)"""
+    s = s.split(',')
+    w = torch.Tensor().to(device)
+    for el in s:
+        if os.path.isfile(el):
+            w_el = get_w_from_file(el)  # np.ndarray
+            w_el = torch.from_numpy(w_el).to(device)  # torch.tensor
+            w = torch.cat((w_el, w))
+        else:
+            nums = num_range(el)
+            for n in nums:
+                w = torch.cat((get_w_from_seed(G, device, n, truncation_psi), w))
+    return w
+
+
 # ----------------------------------------------------------------------------
 
 
@@ -101,6 +119,7 @@ def main():
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
 @click.option('--description', '-desc', type=str, help='Description name for the directory path to save results', default='', show_default=True)
+@click.option('--save-run-config', is_flag=True, help='Save run configuration (params, hyperparams) as a JSON file for easier debugging and tracking of runs')
 def generate_style_mix(
         ctx: click.Context,
         network_pkl: str,
@@ -110,7 +129,8 @@ def generate_style_mix(
         truncation_psi: float,
         noise_mode: str,
         outdir: str,
-        description: str
+        description: str,
+        save_run_config: bool
 ):
     """Generate style-mixing images using pretrained network pickle.
 
@@ -135,7 +155,7 @@ def generate_style_mix(
         col_styles[:] = [style for style in col_styles if style < max_style]
 
     print('Generating W vectors...')
-    all_seeds = list(set(row_seeds + col_seeds))
+    all_seeds = list(set(row_seeds + col_seeds))  # TODO: change this in order to use _parse_cols
     all_z = np.stack([np.random.RandomState(seed).randn(G.z_dim) for seed in all_seeds])
     all_w = G.mapping(torch.from_numpy(all_z).to(device), None)
     w_avg = G.mapping.w_avg
@@ -183,33 +203,28 @@ def generate_style_mix(
         PIL.Image.fromarray(image, 'RGB').save(os.path.join(run_dir, f'{row_seed}-{col_seed}.jpg'))
 
     # Save the configuration used
-    ctx.obj = {
-        'network_pkl': network_pkl,
-        'row_seeds': row_seeds,
-        'col_seeds': col_seeds,
-        'col_styles': col_styles,
-        'truncation_psi': truncation_psi,
-        'noise_mode': noise_mode,
-        'run_dir': run_dir,
-        'description': description,
-    }
-    # Save the run configuration
-    save_config(ctx=ctx, run_dir=run_dir)
+    if save_run_config:
+        ctx.obj = {
+            'network_pkl': network_pkl,
+            'row_seeds': row_seeds,
+            'col_seeds': col_seeds,
+            'col_styles': col_styles,
+            'truncation_psi': truncation_psi,
+            'noise_mode': noise_mode,
+            'run_dir': run_dir,
+            'description': description,
+        }
+        save_config(ctx=ctx, run_dir=run_dir)
 
 
 # ----------------------------------------------------------------------------
-
-
-def _parse_cols(s: str):
-    """s can be a path to a npy/npz file or a seed number (int); TODO"""
-    pass
 
 
 @main.command(name='video')
 @click.pass_context
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--row-seed', '-row', 'row_seed', type=int, help='Random seed to use for video row', required=True)
-@click.option('--col-seeds', '-cols', 'col_seeds', type=num_range, help='Random seeds to use for image columns', required=True)
+@click.option('--columns', '-cols', 'columns', type=str, help='Path to dlatents (.npy/.npz) or seeds to use ("a", "b-c", "e,f-g,h,i", etc.), or a combination of both', required=True)
 @click.option('--styles', 'col_styles', type=parse_styles, help='Style layers to use; can pass "coarse", "middle", "fine", or a list or range of ints', default='0-6', show_default=True)
 @click.option('--only-stylemix', is_flag=True, help='Add flag to only show the style-mixed images in the video')
 @click.option('--compress', is_flag=True, help='Add flag to compress the final mp4 file via ffmpeg-python (same resolution, lower file size)')
@@ -218,12 +233,13 @@ def _parse_cols(s: str):
 @click.option('--duration-sec', type=float, help='Duration of the video in seconds', default=30, show_default=True)
 @click.option('--fps', type=parse_fps, help='Video FPS.', default=30, show_default=True)
 @click.option('--outdir', type=click.Path(file_okay=False), help='Directory path to save the results', default=os.path.join(os.getcwd(), 'out'), show_default=True, metavar='DIR')
+@click.option('--save-run-config', is_flag=True, help='Save run configuration (params, hyperparams) as a JSON file for easier debugging and tracking of runs')
 @click.option('--description', '-desc', type=str, help='Description name for the directory path to save results', default='', show_default=True)
 def random_stylemix_video(
         ctx: click.Context,
         network_pkl: str,
         row_seed: int,
-        col_seeds: List[int],
+        columns: str,
         col_styles: List[int],
         only_stylemix: bool,
         compress: bool,
@@ -232,6 +248,7 @@ def random_stylemix_video(
         fps: int,
         duration_sec: float,
         outdir: Union[str, os.PathLike],
+        save_run_config: bool,
         description: str,
         smoothing_sec: Optional[float] = 3.0  # for Gaussian blur; won't be a parameter, change at own risk
 ):
@@ -278,16 +295,17 @@ def random_stylemix_video(
     src_w = w_avg + (src_w - w_avg) * truncation_psi
 
     # First row (images) latents
-    dst_z = np.stack([np.random.RandomState(seed).randn(G.z_dim) for seed in col_seeds])
-    dst_w = G.mapping(torch.from_numpy(dst_z).to(device), None)
-    dst_w = w_avg + (dst_w - w_avg) * truncation_psi
+    dst_w = _parse_cols(columns, G, device, truncation_psi)
+    # dst_z = np.stack([np.random.RandomState(seed).randn(G.z_dim) for seed in col_seeds])
+    # dst_w = G.mapping(torch.from_numpy(dst_z).to(device), None)
+    # dst_w = w_avg + (dst_w - w_avg) * truncation_psi
 
     # Width and height of the generated image
     W = G.img_resolution
     H = G.img_resolution
 
     # Video name
-    mp4_name = f'{len(col_seeds)}x1'
+    mp4_name = f'{len(dst_w)}x1'
     # Run dir name
     description = 'stylemix-video' if len(description) == 0 else description
     # Add to the name the styles (from the StyleGAN paper) if they are being used to both file and run dir
@@ -299,7 +317,7 @@ def random_stylemix_video(
     if only_stylemix:
         print('Generating style-mixing video (with only the style-transferred images)...')
         # We generate a canvas where we will paste all the generated images
-        canvas = PIL.Image.new('RGB', (W * len(col_seeds), H * len([row_seed])), 'black')  # use any color you want
+        canvas = PIL.Image.new('RGB', (W * len(dst_w), H * len([row_seed])), 'black')  # use any color you want
 
         def make_frame(t):
             # Get the frame number according to time t
@@ -322,7 +340,7 @@ def random_stylemix_video(
     else:
         print('Generating style-mixing video...')
         # Generate an empty canvas where we will paste all the generated images
-        canvas = PIL.Image.new('RGB', (W * (len(col_seeds) + 1), H * (len([row_seed]) + 1)), 'black')
+        canvas = PIL.Image.new('RGB', (W * (len(dst_w) + 1), H * (len([row_seed]) + 1)), 'black')
 
         # Generate all destination images (first row; static images)
         dst_images = w_to_img(G, dst_w, noise_mode)
@@ -362,27 +380,28 @@ def random_stylemix_video(
     final_video = os.path.join(run_dir, f'{mp4_name}.mp4')
     videoclip.write_videofile(final_video, fps=fps, codec='libx264', bitrate='16M')
 
-    # Compress the video (lower file size, same resolution)
+    # Compress the video (smaller file size, same resolution; not guaranteed though)
     if compress:
         compress_video(original_video=final_video, original_video_name=mp4_name, outdir=run_dir, ctx=ctx)
 
-    # Save the configuration used
-    ctx.obj = {
-        'network_pkl': network_pkl,
-        'row_seed': row_seed,
-        'col_seeds': col_seeds,
-        'col_styles': col_styles,
-        'only_stylemix': only_stylemix,
-        'compress': compress,
-        'truncation_psi': truncation_psi,
-        'noise_mode': noise_mode,
-        'duration_sec': duration_sec,
-        'video_fps': fps,
-        'run_dir': run_dir,
-        'description': description,
-    }
-    # Save the run configuration
-    save_config(ctx=ctx, run_dir=run_dir)
+    # Save the configuration used for the experiment
+    if save_run_config:
+        ctx.obj = {
+            'network_pkl': network_pkl,
+            'row_seed': row_seed,
+            'columns': columns,
+            'col_styles': col_styles,
+            'only_stylemix': only_stylemix,
+            'compress': compress,
+            'truncation_psi': truncation_psi,
+            'noise_mode': noise_mode,
+            'duration_sec': duration_sec,
+            'video_fps': fps,
+            'run_dir': run_dir,
+            'description': description,
+        }
+        # Save the run configuration
+        save_config(ctx=ctx, run_dir=run_dir)
 
 
 # ----------------------------------------------------------------------------
