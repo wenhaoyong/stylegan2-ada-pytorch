@@ -464,7 +464,9 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--mirror-y', help='Enable dataset y=flips [default: false]', type=bool, metavar='BOOL')
 
 # Base config.
-@click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar', '24gb-2gpu', '24gb-4gpu', '24gb-2gpu-cplx', '24gb-4gpu-cplx']))
+@click.option('--cfg', help='Base config [default: auto]',
+              type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar', '24gb-2gpu',
+                                 '24gb-4gpu', '24gb-2gpu-cplx', '24gb-4gpu-cplx', '48gb-2gpu', '48gb-4gpu']))
 @click.option('--gamma', help='Override R1 gamma', type=float)
 @click.option('--kimg', help='Override training duration', type=int, metavar='INT')
 @click.option('--batch', help='Override batch size', type=int, metavar='INT')
