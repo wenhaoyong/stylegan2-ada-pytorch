@@ -5,6 +5,8 @@ This README will eventually be updated to correctly show how to run the followin
   a need to specify where the output will be saved. The output directories will be automatically generated, as was done in the 
   previous implementations ([ProGAN](https://github.com/tkarras/progressive_growing_of_gans) / [StyleGAN](https://github.com/NVlabs/stylegan) 
   / [StyleGAN2](https://github.com/NVlabs/stylegan2)).
+* **Setup of image snapshot resolution and its saving frequency**: Use `--img-snap` to set how often to save the snapshot grid of
+  `fakes.jpg`, as well as its resolution via `--snap-res` (options: `1080p`, `4k`, and `8k`).
 * **Random interpolation video**: Run `python generate.py random-video --help` on how to run it, but usage is similar as in 
   [StyleGAN2](https://github.com/PDillis/stylegan2-fun#random-interpolation) (only the name changes).
 * **Style mixing videos**: Run `python style_mixing.py video --help` on how to run it, but usage is similar as in 

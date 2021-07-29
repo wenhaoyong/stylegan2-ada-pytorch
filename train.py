@@ -33,6 +33,7 @@ def setup_training_loop_kwargs(
     # General options (not included in desc).
     gpus       = None, # Number of GPUs: <int>, default = 1 gpu
     snap       = None, # Snapshot interval: <int>, default = 50 ticks
+    img_snap   = None, # Image snapshot interval: <int>, default = 50 ticks
     snap_res   = None,  # Snapshot size (1080p/4k/8k)
     metrics    = None, # List of metric names: [], ['fid50k_full'] (default), ...
     seed       = None, # Random seed: <int>, default = 0
@@ -86,8 +87,12 @@ def setup_training_loop_kwargs(
     assert isinstance(snap, int)
     if snap < 1:
         raise UserError('--snap must be at least 1')
-    args.image_snapshot_ticks = 1  # I prefer to see how it evolves vs. find out only when the model saves
     args.network_snapshot_ticks = snap
+
+    assert isinstance(img_snap, int)
+    if img_snap < 1:
+        raise UserError('--img-snap must be at least 1')
+    args.image_snapshot_ticks = img_snap  # I prefer to see how it evolves vs. find out only when the model saves
 
     args.snap_res = '8k' if snap_res is None else snap_res
 
@@ -171,6 +176,8 @@ def setup_training_loop_kwargs(
         '24gb-4gpu':      dict(ref_gpus=4,  kimg=25000,  mb=48, mbstd=12, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=8),  # Made for 1024x1024 dataset; adapted from @dvschultz
         '24gb-2gpu-cplx': dict(ref_gpus=2,  kimg=25000,  mb=24, mbstd=12, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=4),  # Complex model, inspired by @aydao
         '24gb-4gpu-cplx': dict(ref_gpus=4,  kimg=25000,  mb=48, mbstd=12, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=4),  # Complex model, inspired by @aydao
+        '48gb-2gpu':      dict(ref_gpus=2,  kimg=25000,  mb=48, mbstd=24, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=8),  # Made for 1024x1024 dataset; adapted from @dvschultz
+        '48gb-4gpu':      dict(ref_gpus=4,  kimg=25000,  mb=96, mbstd=24, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=8),  # Made for 1024x1024 dataset; adapted from @dvschultz
     }
 
     assert cfg in cfg_specs
@@ -291,7 +298,6 @@ def setup_training_loop_kwargs(
             raise UserError('--augpipe cannot be specified with --aug=noaug')
         desc += f'-{augpipe}'
 
-    # Remove yflip=1; move to other configs using yflip (blit-y, bg-y, bgc-y, ...)
     augpipe_specs = {
         'blit':   dict(xflip=1, rotate90=1, xint=1),
         'geom':   dict(scale=1, rotate=1, aniso=1, xfrac=1),
@@ -444,6 +450,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--outdir', help='Where to save the results', type=click.Path(file_okay=False), default=os.path.join(os.getcwd(), 'training-runs'), show_default=True, metavar='DIR')
 @click.option('--gpus', help='Number of GPUs to use', type=click.IntRange(min=1, max=8), default=1, show_default=True, metavar='INT')
 @click.option('--snap', help='Snapshot interval in ticks', type=int, default=50, show_default=True, metavar='INT')
+@click.option('--img-snap', help='Image snapshot interval', type=int, default=50, show_default=True, metavar='INT')
 @click.option('--snap-res', help='Image snapshot resolution', type=click.Choice(['1080p', '4k', '8k']), default='8k', show_default=True)
 @click.option('--metrics', help='Comma-separated list of metrics or "none" [default: fid50k_full]', type=CommaSeparatedList(), )
 @click.option('--seed', help='Random seed [default: 0]', type=int, metavar='INT')
