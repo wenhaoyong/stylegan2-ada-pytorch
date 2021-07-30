@@ -176,8 +176,8 @@ def setup_training_loop_kwargs(
         '24gb-4gpu':      dict(ref_gpus=4,  kimg=25000,  mb=48, mbstd=12, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=8),  # Made for 1024x1024 dataset; adapted from @dvschultz
         '24gb-2gpu-cplx': dict(ref_gpus=2,  kimg=25000,  mb=24, mbstd=12, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=4),  # Complex model, inspired by @aydao
         '24gb-4gpu-cplx': dict(ref_gpus=4,  kimg=25000,  mb=48, mbstd=12, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=4),  # Complex model, inspired by @aydao
-        '48gb-2gpu':      dict(ref_gpus=2,  kimg=25000,  mb=48, mbstd=24, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=8),  # Made for 1024x1024 dataset; adapted from @dvschultz
-        '48gb-4gpu':      dict(ref_gpus=4,  kimg=25000,  mb=96, mbstd=24, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=8),  # Made for 1024x1024 dataset; adapted from @dvschultz
+        '48gb-2gpu':      dict(ref_gpus=2,  kimg=25000,  mb=40, mbstd=20, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=8),  # Made for 512x512 dataset; adapted from @dvschultz
+        '48gb-4gpu':      dict(ref_gpus=4,  kimg=25000,  mb=80, mbstd=20, fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=8),  # Made for 512x512 dataset; adapted from @dvschultz
     }
 
     assert cfg in cfg_specs
