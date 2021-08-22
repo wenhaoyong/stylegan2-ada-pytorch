@@ -81,10 +81,10 @@ class VGG16Features(torch.nn.Module):
             param.requires_grad = False
 
     def forward(self, x):
-        conv1_1 = self.slice0(x)
-        conv1_2 = self.slice1(conv1_1)
-        conv3_2 = self.slice2(conv1_2)
-        conv4_2 = self.slice3(conv3_2)
+        conv1_1 = self.conv1_1(x)
+        conv1_2 = self.conv1_2(conv1_1)
+        conv3_2 = self.conv3_2(conv1_2)
+        conv4_2 = self.conv4_2(conv3_2)
 
         conv1_1 = conv1_1 / torch.numel(conv1_1)
         conv1_2 = conv1_2 / torch.numel(conv1_2)
